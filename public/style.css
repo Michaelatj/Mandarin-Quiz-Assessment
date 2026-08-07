@@ -155,6 +155,195 @@
   --glow-b: rgba(143, 174, 125, 0.04);
 }
 
+/* Bamboo Grove - fresh green tones, natural and calming */
+[data-theme="bamboo"] {
+  --bg: #0f1410;
+  --surface: #1a2318;
+  --surface-alt: #243120;
+  --surface-hover: #2e3d28;
+  --border: #3a4d32;
+  --text: #e6efe3;
+  --text-muted: #9fb398;
+  --text-faint: #6b7d65;
+
+  --accent: #6b8c42;
+  --accent-hover: #7fa356;
+  --accent-soft: rgba(107, 140, 66, 0.16);
+
+  --jade: #c9a86a;
+  --jade-soft: rgba(201, 168, 106, 0.14);
+
+  --font-display: "Noto Serif SC", serif;
+
+  --radius-sm: 6px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-btn: 8px;
+  --seal-radius: 12%;
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --glow-a: rgba(107, 140, 66, 0.07);
+  --glow-b: rgba(201, 168, 106, 0.04);
+}
+
+/* Blue Porcelain - cool celadon blues like fine china */
+[data-theme="porcelain"] {
+  --bg: #0d1218;
+  --surface: #16202a;
+  --surface-alt: #1f2d3a;
+  --surface-hover: #2a3a4a;
+  --border: #354656;
+  --text: #e3ebf2;
+  --text-muted: #94a8b8;
+  --text-faint: #637585;
+
+  --accent: #4a7ba7;
+  --accent-hover: #5d8fbc;
+  --accent-soft: rgba(74, 123, 167, 0.16);
+
+  --jade: #7bb8a8;
+  --jade-soft: rgba(123, 184, 168, 0.14);
+
+  --font-display: "Playfair Display", "Noto Serif SC", serif;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 14px;
+  --radius-btn: 999px;
+  --seal-radius: 50%;
+  --seal-glow: 0 0 15px rgba(74, 123, 167, 0.25);
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --glow-a: rgba(74, 123, 167, 0.07);
+  --glow-b: rgba(123, 184, 168, 0.04);
+}
+
+/* Lotus Pond - soft purple-pink water lily tones */
+[data-theme="lotus"] {
+  --bg: #140f14;
+  --surface: #1f1820;
+  --surface-alt: #2a202c;
+  --surface-hover: #352838;
+  --border: #423045;
+  --text: #f0e6ef;
+  --text-muted: #b09aae;
+  --text-faint: #7a6876;
+
+  --accent: #a85d8c;
+  --accent-hover: #bd74a3;
+  --accent-soft: rgba(168, 93, 140, 0.16);
+
+  --jade: #8fb37a;
+  --jade-soft: rgba(143, 179, 122, 0.14);
+
+  --font-display: "Lora", "Noto Serif SC", serif;
+
+  --radius-sm: 10px;
+  --radius: 18px;
+  --radius-lg: 28px;
+  --radius-btn: 999px;
+  --seal-radius: 35%;
+  --seal-glow: 0 0 18px rgba(168, 93, 140, 0.3);
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --glow-a: rgba(168, 93, 140, 0.08);
+  --glow-b: rgba(143, 179, 122, 0.04);
+}
+
+/* Rice Paper - warm beige parchment feel */
+[data-theme="rice"] {
+  --bg: #1a1612;
+  --surface: #262018;
+  --surface-alt: #322a1e;
+  --surface-hover: #3d3424;
+  --border: #4a4030;
+  --text: #f2eadc;
+  --text-muted: #c4b498;
+  --text-faint: #8a7d65;
+
+  --accent: #d4c5a9;
+  --accent-hover: #e0d4bc;
+  --accent-soft: rgba(212, 197, 169, 0.14);
+
+  --jade: #8fa87a;
+  --jade-soft: rgba(143, 168, 122, 0.14);
+
+  --font-display: "Noto Serif SC", serif;
+
+  --radius-sm: 2px;
+  --radius: 4px;
+  --radius-lg: 8px;
+  --radius-btn: 4px;
+  --seal-radius: 8%;
+  --card-border-style: dashed;
+  --card-border-width: 1.5px;
+  --glow-a: rgba(212, 197, 169, 0.06);
+  --glow-b: rgba(143, 168, 122, 0.04);
+}
+
+/* Red Lacquer - deep glossy crimson traditional lacquerware */
+[data-theme="lacquer"] {
+  --bg: #0a0508;
+  --surface: #1a0a10;
+  --surface-alt: #2a0f18;
+  --surface-hover: #3a1420;
+  --border: #4a1a28;
+  --text: #f5e6ea;
+  --text-muted: #b894a0;
+  --text-faint: #7a5a65;
+
+  --accent: #8b1538;
+  --accent-hover: #a31f45;
+  --accent-soft: rgba(139, 21, 56, 0.18);
+
+  --jade: #6b8c42;
+  --jade-soft: rgba(107, 140, 66, 0.14);
+
+  --font-display: "Noto Serif SC", serif;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-btn: 8px;
+  --seal-radius: 16%;
+  --card-border-style: solid;
+  --card-border-width: 2px;
+  --seal-glow: 0 0 25px rgba(139, 21, 56, 0.4);
+  --glow-a: rgba(139, 21, 56, 0.1);
+  --glow-b: rgba(107, 140, 66, 0.04);
+}
+
+/* Moonlight - cool silvery gray-blue night sky */
+[data-theme="moonlight"] {
+  --bg: #0d1116;
+  --surface: #161d26;
+  --surface-alt: #1f2834;
+  --surface-hover: #2a3542;
+  --border: #354252;
+  --text: #e6ecf2;
+  --text-muted: #9aa8b8;
+  --text-faint: #657585;
+
+  --accent: #7d8ca3;
+  --accent-hover: #92a0b5;
+  --accent-soft: rgba(125, 140, 163, 0.16);
+
+  --jade: #8fb37a;
+  --jade-soft: rgba(143, 179, 122, 0.14);
+
+  --font-display: "Space Grotesk", "Noto Serif SC", sans-serif;
+
+  --radius-sm: 4px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-btn: 999px;
+  --seal-radius: 50%;
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --glow-a: rgba(125, 140, 163, 0.07);
+  --glow-b: rgba(143, 179, 122, 0.04);
+}
+
 * { box-sizing: border-box; }
 
 html, body {

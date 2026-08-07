@@ -10,6 +10,10 @@
 // would erase data/db.json. If you deploy somewhere like that, either
 // pick a plan/host with a persistent disk, or just run the app on your
 // own always-on machine. See README.md for details.
+//
+// DATABASE LOCATION: ./data/db.json
+// To check the database manually, open that file. All quizzes, attempts,
+// students, and teachers are stored there as plain JSON.
 
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +21,12 @@ const path = require('path');
 const DB_PATH = path.join(__dirname, 'data', 'db.json');
 
 function emptyState() {
-  return { quizzes: [], attempts: [] };
+  return { 
+    quizzes: [], 
+    attempts: [],
+    students: [],   // { id, name, pin, createdAt }
+    teachers: []    // { id, name, username, passwordHash, createdAt, isOwner }
+  };
 }
 
 function load() {
