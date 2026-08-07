@@ -21,7 +21,6 @@
     }
   ],
   "env": {
-    "TEACHER_PASSCODE": "change-me-please",
     "NODE_ENV": "production"
   },
   "outputDirectory": "public"
