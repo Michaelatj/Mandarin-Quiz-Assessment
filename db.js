@@ -14,11 +14,34 @@
 // DATABASE LOCATION: ./data/db.json
 // To check the database manually, open that file. All quizzes, attempts,
 // students, and teachers are stored there as plain JSON.
+//
+// DEPLOYMENT NOTE: On Vercel and similar serverless platforms, the
+// filesystem is read-only. This module automatically detects that and
+// switches to an in-memory database instead. Data will persist only for
+// the lifetime of the serverless function invocation - this is suitable
+// for testing/demo purposes. For production use on Vercel, consider
+// connecting to an external database like Supabase or MongoDB Atlas.
 
 const fs = require('fs');
 const path = require('path');
 
 const DB_PATH = path.join(__dirname, 'data', 'db.json');
+
+// Detect if we're running in a read-only environment (e.g., Vercel)
+let isReadOnly = false;
+try {
+  const testPath = path.join(__dirname, '.write_test_' + Date.now());
+  fs.writeFileSync(testPath, 'test');
+  fs.unlinkSync(testPath);
+} catch (err) {
+  if (err.code === 'EROFS' || err.code === 'EPERM' || err.code === 'EACCES') {
+    isReadOnly = true;
+    console.warn('[db.js] Filesystem is read-only. Using in-memory database.');
+  }
+}
+
+// In-memory state for read-only environments
+let memoryState = null;
 
 function emptyState() {
   return { 
@@ -30,6 +53,13 @@ function emptyState() {
 }
 
 function load() {
+  if (isReadOnly) {
+    if (!memoryState) {
+      memoryState = emptyState();
+    }
+    return memoryState;
+  }
+  
   if (!fs.existsSync(DB_PATH)) {
     save(emptyState());
   }
@@ -46,6 +76,10 @@ function load() {
 }
 
 function save(state) {
+  if (isReadOnly) {
+    memoryState = state;
+    return;
+  }
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   fs.writeFileSync(DB_PATH, JSON.stringify(state, null, 2), 'utf-8');
 }
