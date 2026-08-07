@@ -18,29 +18,150 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------------------------------------------------------------------
-// Teacher auth
-//
-// This is a single-teacher personal tool, not a multi-user system, so
-// there are no accounts or sessions - just one shared passcode from
-// .env. Every teacher-only request must include it in the
-// x-teacher-key header. The browser stores it in localStorage after
-// a successful login and attaches it automatically (see public/js/api.js).
+// Teacher auth - supports both single passcode (legacy) and multi-teacher
 // ---------------------------------------------------------------------
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
 
 function requireTeacher(req, res, next) {
   const key = req.get('x-teacher-key');
-  if (!key || key !== TEACHER_PASSCODE) {
-    return res.status(401).json({ error: 'Incorrect or missing passcode.' });
+  // Legacy single-teacher mode
+  if (key && key === TEACHER_PASSCODE && TEACHER_PASSCODE !== 'change-me-please') {
+    return next();
   }
+  // Multi-teacher mode with session token
+  if (!key) {
+    return res.status(401).json({ error: 'Missing authentication.' });
+  }
+  const state = db.load();
+  const teacher = state.teachers.find(t => t.sessionToken === key);
+  if (!teacher) {
+    return res.status(401).json({ error: 'Invalid session.' });
+  }
+  req.teacher = teacher;
   next();
 }
 
 app.post('/api/teacher/login', (req, res) => {
-  const { passcode } = req.body || {};
-  if (passcode === TEACHER_PASSCODE) {
-    return res.json({ ok: true });
+  const { passcode, username, password } = req.body || {};
+  
+  // Legacy single passcode login
+  if (passcode && passcode === TEACHER_PASSCODE && TEACHER_PASSCODE !== 'change-me-please') {
+    return res.json({ ok: true, legacyMode: true, teacherKey: passcode });
   }
-  return res.status(401).json({ error: 'Incorrect passcode.' });
+  
+  // Multi-teacher login
+  if (username && password) {
+    const state = db.load();
+    const teacher = state.teachers.find(t => t.username === username);
+    if (!teacher) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+    if (teacher.passwordHash !== hashPassword(password)) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+    const sessionToken = nanoid(32);
+    db.update(state => {
+      const t = state.teachers.find(tea => tea.id === teacher.id);
+      t.sessionToken = sessionToken;
+    });
+    return res.json({ 
+      ok: true, 
+      teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
+      teacherKey: sessionToken 
+    });
+  }
+  
+  return res.status(400).json({ error: 'Invalid login request.' });
+});
+
+app.post('/api/teacher/register', (req, res) => {
+  const { name, username, password, ownerKey } = req.body || {};
+  
+  if (!name || !username || !password) {
+    return res.status(400).json({ error: 'Name, username, and password are required.' });
+  }
+  if (username.length < 3 || password.length < 4) {
+    return res.status(400).json({ error: 'Username must be 3+ chars, password 4+ chars.' });
+  }
+  
+  const state = db.load();
+  
+  // Check if owner exists and validate ownerKey for first registration
+  const owners = state.teachers.filter(t => t.isOwner);
+  if (owners.length === 0) {
+    // First teacher becomes owner
+    const teacher = {
+      id: nanoid(12),
+      name: name.trim(),
+      username: username.trim().toLowerCase(),
+      passwordHash: hashPassword(password),
+      createdAt: new Date().toISOString(),
+      isOwner: true,
+      sessionToken: nanoid(32)
+    };
+    state.teachers.push(teacher);
+    db.save(state);
+    return res.status(201).json({ 
+      ok: true, 
+      teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
+      teacherKey: teacher.sessionToken 
+    });
+  }
+  
+  // Subsequent teachers need owner approval via ownerKey
+  if (ownerKey !== TEACHER_PASSCODE) {
+    return res.status(403).json({ error: 'Owner passcode required to add new teachers.' });
+  }
+  
+  if (state.teachers.some(t => t.username === username.toLowerCase())) {
+    return res.status(409).json({ error: 'Username already taken.' });
+  }
+  
+  const teacher = {
+    id: nanoid(12),
+    name: name.trim(),
+    username: username.trim().toLowerCase(),
+    passwordHash: hashPassword(password),
+    createdAt: new Date().toISOString(),
+    isOwner: false,
+    sessionToken: nanoid(32)
+  };
+  state.teachers.push(teacher);
+  db.save(state);
+  return res.status(201).json({ 
+    ok: true, 
+    teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
+    teacherKey: teacher.sessionToken 
+  });
+});
+
+app.get('/api/teachers', requireTeacher, (req, res) => {
+  const state = db.load();
+  const teachers = state.teachers.map(t => ({
+    id: t.id,
+    name: t.name,
+    username: t.username,
+    isOwner: t.isOwner,
+    createdAt: t.createdAt
+  }));
+  res.json(teachers);
+});
+
+app.delete('/api/teachers/:id', requireTeacher, (req, res) => {
+  const state = db.load();
+  const currentTeacher = state.teachers.find(t => t.sessionToken === req.get('x-teacher-key'));
+  if (!currentTeacher || !currentTeacher.isOwner) {
+    return res.status(403).json({ error: 'Only the owner can delete teachers.' });
+  }
+  if (req.params.id === currentTeacher.id) {
+    return res.status(400).json({ error: 'Cannot delete yourself.' });
+  }
+  state.teachers = state.teachers.filter(t => t.id !== req.params.id);
+  db.save(state);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------
@@ -261,8 +382,55 @@ app.get('/api/quizzes/:id/results', requireTeacher, (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// Student routes (no auth - just a join code and a name)
+// Student routes - now with simple PIN-based accounts for retake history
 // ---------------------------------------------------------------------
+
+app.get('/api/students', requireTeacher, (req, res) => {
+  const state = db.load();
+  const students = state.students.map(s => ({
+    id: s.id,
+    name: s.name,
+    createdAt: s.createdAt,
+    attemptCount: state.attempts.filter(a => a.studentId === s.id).length
+  }));
+  res.json(students);
+});
+
+app.post('/api/students/register', (req, res) => {
+  const { name, pin } = req.body || {};
+  if (!name || !pin) {
+    return res.status(400).json({ error: 'Name and PIN are required.' });
+  }
+  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'PIN must be exactly 4 digits.' });
+  }
+  if (name.length > 60) {
+    return res.status(400).json({ error: 'Name is too long.' });
+  }
+  
+  const state = db.load();
+  const existing = state.students.find(s => 
+    s.name.trim().toLowerCase() === name.trim().toLowerCase()
+  );
+  
+  if (existing) {
+    // Return existing student if PIN matches
+    if (existing.pin === pin) {
+      return res.json({ student: { id: existing.id, name: existing.name }, existing: true });
+    }
+    return res.status(409).json({ error: 'A student with this name already exists. Please choose a different name or check your PIN.' });
+  }
+  
+  const student = {
+    id: nanoid(12),
+    name: name.trim(),
+    pin: pin,
+    createdAt: new Date().toISOString()
+  };
+  state.students.push(student);
+  db.save(state);
+  res.status(201).json({ student: { id: student.id, name: student.name }, existing: false });
+});
 
 app.get('/api/join/:code', (req, res) => {
   const state = db.load();
@@ -272,17 +440,47 @@ app.get('/api/join/:code', (req, res) => {
 });
 
 app.post('/api/join/:code', (req, res) => {
-  const name = (req.body?.studentName || '').trim();
-  if (!name) return res.status(400).json({ error: 'Enter your name to start.' });
-  if (name.length > 60) return res.status(400).json({ error: 'That name is too long.' });
-
+  const { studentName, studentPin, studentId } = req.body || {};
+  
+  let student = null;
   const state = db.load();
+  
+  // If studentId provided, they're logging in to existing account
+  if (studentId) {
+    student = state.students.find(s => s.id === studentId);
+    if (!student) {
+      return res.status(404).json({ error: 'Student account not found.' });
+    }
+    if (student.pin !== studentPin) {
+      return res.status(401).json({ error: 'Incorrect PIN.' });
+    }
+  } else {
+    // New student session - just name entry for quick joins
+    const name = (studentName || '').trim();
+    if (!name) return res.status(400).json({ error: 'Enter your name to start.' });
+    if (name.length > 60) return res.status(400).json({ error: 'That name is too long.' });
+    
+    // Find or create student record
+    student = state.students.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
+    if (!student) {
+      // Create temporary student without PIN for one-time joins
+      student = {
+        id: nanoid(12),
+        name: name,
+        pin: null,
+        createdAt: new Date().toISOString()
+      };
+      state.students.push(student);
+      db.save(state);
+    }
+  }
+  
   const quiz = state.quizzes.find((q) => q.code === req.params.code);
   if (!quiz) return res.status(404).json({ error: 'No quiz found for that code.' });
 
   if (quiz.allowRetakes === false) {
     const alreadyDone = state.attempts.some(
-      (a) => a.quizId === quiz.id && a.submittedAt && a.studentName.trim().toLowerCase() === name.toLowerCase()
+      (a) => a.quizId === quiz.id && a.submittedAt && a.studentId === student.id
     );
     if (alreadyDone) {
       return res.status(409).json({ error: 'You already completed this quiz. Ask your teacher if you need another attempt.' });
@@ -292,7 +490,8 @@ app.post('/api/join/:code', (req, res) => {
   const attempt = {
     id: nanoid(12),
     quizId: quiz.id,
-    studentName: name,
+    studentId: student.id,
+    studentName: student.name,
     answers: {},
     score: null,
     total: quiz.questions.reduce((sum, q) => sum + q.points, 0),
@@ -301,7 +500,11 @@ app.post('/api/join/:code', (req, res) => {
   };
   db.update((s) => s.attempts.push(attempt));
 
-  res.status(201).json({ attemptId: attempt.id, quiz: toStudentView(quiz) });
+  res.status(201).json({ 
+    attemptId: attempt.id, 
+    quiz: toStudentView(quiz),
+    student: { id: student.id, name: student.name, hasPin: !!student.pin }
+  });
 });
 
 function recomputeScore(attempt, quiz) {

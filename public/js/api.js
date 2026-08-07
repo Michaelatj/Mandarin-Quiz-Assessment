@@ -7,6 +7,11 @@ const Api = (() => {
   function teacherKey() {
     return localStorage.getItem('teacherKey') || '';
   }
+  
+  function studentData() {
+    const data = localStorage.getItem('studentData');
+    return data ? JSON.parse(data) : null;
+  }
 
   async function request(method, url, body, opts = {}) {
     const headers = { 'Content-Type': 'application/json' };
@@ -34,6 +39,21 @@ const Api = (() => {
   return {
     // Teacher auth
     login: (passcode) => request('POST', '/api/teacher/login', { passcode }),
+    registerTeacher: (name, username, password, ownerKey) => 
+      request('POST', '/api/teacher/register', { name, username, password, ownerKey }),
+    getTeachers: () => request('GET', '/api/teachers', undefined, { asTeacher: true }),
+    deleteTeacher: (id) => request('DELETE', `/api/teachers/${id}`, undefined, { asTeacher: true }),
+
+    // Student accounts
+    registerStudent: (name, pin) => request('POST', '/api/students/register', { name, pin }),
+    getStudents: () => request('GET', '/api/students', undefined, { asTeacher: true }),
+    
+    // Save/load student session data
+    saveStudentSession: (studentId, name, hasPin) => {
+      localStorage.setItem('studentData', JSON.stringify({ id: studentId, name, hasPin }));
+    },
+    getStudentSession: () => studentData(),
+    clearStudentSession: () => localStorage.removeItem('studentData'),
 
     // Teacher quiz management
     listQuizzes: () => request('GET', '/api/quizzes', undefined, { asTeacher: true }),
@@ -45,7 +65,8 @@ const Api = (() => {
 
     // Student flow
     peekQuiz: (code) => request('GET', `/api/join/${code}`),
-    joinQuiz: (code, studentName) => request('POST', `/api/join/${code}`, { studentName }),
+    joinQuiz: (code, studentName, studentPin, studentId) => 
+      request('POST', `/api/join/${code}`, { studentName, studentPin, studentId }),
     submitAttempt: (attemptId, answers) => request('POST', `/api/attempts/${attemptId}/submit`, { answers }),
   };
 })();

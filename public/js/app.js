@@ -55,7 +55,7 @@ function go(hash) {
 }
 
 // ---------------------------------------------------------------------
-// Theme switcher - 4 cozy palettes, remembered per browser
+// Theme switcher - 10 cozy palettes, remembered per browser
 // ---------------------------------------------------------------------
 
 const THEMES = [
@@ -63,6 +63,12 @@ const THEMES = [
   { id: 'teahouse', name: 'Tea House', swatch: '#c88a35' },
   { id: 'midnightjade', name: 'Midnight Jade', swatch: '#5f9c7a' },
   { id: 'plumlantern', name: 'Plum Lantern', swatch: '#c0567a' },
+  { id: 'bamboo', name: 'Bamboo Grove', swatch: '#6b8c42' },
+  { id: 'porcelain', name: 'Blue Porcelain', swatch: '#4a7ba7' },
+  { id: 'lotus', name: 'Lotus Pond', swatch: '#a85d8c' },
+  { id: 'rice', name: 'Rice Paper', swatch: '#d4c5a9' },
+  { id: 'lacquer', name: 'Red Lacquer', swatch: '#8b1538' },
+  { id: 'moonlight', name: 'Moonlight', swatch: '#7d8ca3' },
 ];
 
 function currentTheme() {
@@ -498,21 +504,31 @@ function renderStudent(rest) {
 
 function renderStudentJoin() {
   const prefillCode = getQueryParam('code');
+  const savedStudent = Api.getStudentSession();
+  
   mainEl().innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
     <div class="card" style="max-width: 420px; margin: 20px auto;">
       <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('student', 26)}</div>
       <h2>Join a quiz</h2>
       <p>Ask your teacher for the 6-digit code.</p>
+      ${savedStudent ? `
+        <div style="background:var(--surface-alt); padding:12px; border-radius:var(--radius-sm); margin-bottom:16px; font-size:13px;">
+          Logged in as <strong>${escapeHtml(savedStudent.name)}</strong>
+          <button class="btn btn-ghost btn-sm" style="float:right; padding:2px 8px;" onclick="Api.clearStudentSession(); renderStudentJoin()">Switch</button>
+        </div>
+      ` : ''}
       <form id="join-form">
         <div class="field">
           <label>Quiz code</label>
           <input class="input input-code" id="join-code" maxlength="6" inputmode="numeric" placeholder="000000" value="${escapeHtml(prefillCode)}" required />
         </div>
-        <div class="field">
-          <label>Your name</label>
-          <input class="input" id="join-name" placeholder="e.g. Wei Ling" required maxlength="60" />
-        </div>
+        ${!savedStudent ? `
+          <div class="field">
+            <label>Your name</label>
+            <input class="input" id="join-name" placeholder="e.g. Wei Ling" required maxlength="60" />
+          </div>
+        ` : ''}
         <div id="join-error" class="error-text"></div>
         <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Start quiz</button>
       </form>
@@ -522,13 +538,25 @@ function renderStudentJoin() {
   document.getElementById('join-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const code = document.getElementById('join-code').value.trim();
-    const name = document.getElementById('join-name').value.trim();
     const errorEl = document.getElementById('join-error');
     errorEl.textContent = '';
+    
     try {
-      const { attemptId, quiz } = await Api.joinQuiz(code, name);
-      state.studentAttemptId = attemptId;
-      state.studentQuiz = quiz;
+      let result;
+      if (savedStudent) {
+        // Use saved student account
+        result = await Api.joinQuiz(code, null, null, savedStudent.id);
+      } else {
+        const name = document.getElementById('join-name').value.trim();
+        result = await Api.joinQuiz(code, name, null, null);
+        // Save student session if they have an account
+        if (result.student && result.student.hasPin) {
+          Api.saveStudentSession(result.student.id, result.student.name, true);
+        }
+      }
+      
+      state.studentAttemptId = result.attemptId;
+      state.studentQuiz = result.quiz;
       state.studentAnswers = {};
       state.studentQuestionIndex = 0;
       state.studentMeaningOn = false;
@@ -615,7 +643,15 @@ function renderStudentQuiz() {
   });
 
   document.getElementById('meaning-toggle').addEventListener('change', (e) => {
-    state.studentMeaningOn = e.target.checked;
+    const isChecked = e.target.checked;
+    if (isChecked && !state.studentMeaningOn) {
+      // Show warning notification when turning meaning ON
+      if (!confirm('⚠️ Warning: Using the meaning hint will reduce your score by 50% for correct answers.\n\nAre you sure you want to turn on the meaning hints?')) {
+        e.target.checked = false;
+        return;
+      }
+    }
+    state.studentMeaningOn = isChecked;
     renderStudentQuiz();
   });
 
