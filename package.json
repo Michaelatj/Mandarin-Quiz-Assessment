@@ -1,0 +1,19 @@
+{
+  "name": "mandarin-quiz-app",
+  "version": "1.0.0",
+  "description": "A self-hosted quiz tool for a Mandarin teacher: paste AI-generated JSON quizzes, share a join code with students, and review results.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "nanoid": "^3.3.7"
+  }
+}
