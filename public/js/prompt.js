@@ -55,11 +55,12 @@ Options - give more than the app shows at once:
 - Every distractor needs a real reason a student might pick it (a near-meaning word, a similar-sounding word, a common mix-up) - not random unrelated words.
 - If "optionMeanings" is included, it must be the same length as "options", same order.
 
-Valid JSON rules - read carefully, this matters:
-- Never use a straight double quote character (") anywhere inside a text value, including inside the pinyin parentheses or an English aside. A stray " inside a string breaks the JSON and the whole quiz gets rejected.
-- If you need to show quoted speech inside a question, option, or meaning, use the Chinese quotation marks “...” or 「...」 instead of "...". Better yet, just rephrase without quoting anything.
-- Do not use backslashes in any text value.
-- Before answering, mentally check that every value is a normal quoted string with no stray " or \\ characters inside it.
+Valid JSON rules - CRITICAL, read carefully:
+- NEVER use straight double quotes (") inside any text value - this includes inside pinyin parentheses, English translations, or example sentences. A single stray " will break the entire JSON and reject the quiz.
+- If you need to show quoted speech or dialogue, use Chinese quotation marks [...] or「...」instead, or rephrase to avoid quoting entirely.
+- Do NOT use backslashes (\\) in any text value.
+- Before answering, scan every string value to confirm there are NO " characters and NO \\ characters anywhere inside the text itself.
+- The only double quotes allowed in your entire response are the ones that delimit JSON keys and string values - nowhere else.
 
 Other rules:
 - Every question is "multiple_choice".
