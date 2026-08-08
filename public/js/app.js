@@ -8,23 +8,94 @@
 const state = {
   studentAttemptId: null,
   studentQuiz: null,
-  studentAnswers: {}, // { [questionId]: { value, usedMeaning, timeTakenMs } }
+  studentAnswers: {}, // { [questionId]: { value, usedMeaning, answeredAtMs, correct } }
   studentQuestionIndex: 0,
   studentMeaningOn: false, // the "show meaning" toggle, on/off for the whole attempt
-  studentQuestionStartTimes: {}, // { [questionId]: Date.now() when first shown } - for the speed bonus
+  studentQuizStartedAt: null, // Date.now() when the student started the quiz - the ONE clock the whole-quiz timer and every answer's speed bonus are measured against
+  studentStreak: 0, // current consecutive-correct streak
+  studentBestStreak: 0,
 };
 
-// Handle for the currently-running per-question countdown, if the quiz
-// has a time limit. Module-level (not in `state`) because it's a live
-// timer handle, not data - always cleared at the top of every
+// Handle for the running quiz-wide countdown, if the quiz has a time
+// limit. Module-level (not in `state`) because it's a live timer
+// handle, not data - always cleared at the top of every
 // renderStudentQuiz() call so re-renders never leave a duplicate
-// ticking in the background.
-let questionTimerInterval = null;
-function clearQuestionTimer() {
-  if (questionTimerInterval) {
-    clearInterval(questionTimerInterval);
-    questionTimerInterval = null;
+// ticking in the background. Unlike the old per-question timer, this
+// one is NOT restarted on every question - it just keeps ticking
+// against the fixed studentQuizStartedAt for the whole attempt.
+let quizTimerInterval = null;
+function clearQuizTimer() {
+  if (quizTimerInterval) {
+    clearInterval(quizTimerInterval);
+    quizTimerInterval = null;
   }
+}
+
+// ---------------------------------------------------------------------
+// Sound effects - synthesized with the Web Audio API, no audio files
+// to ship or license. A handful of short tones/chimes, Duolingo-style:
+// a soft "ding" per correct answer, a slightly bigger chime at streak
+// milestones, and a low buzz on a miss. All muted automatically if
+// the browser blocks autoplay before the student has interacted with
+// the page yet - the try/catch just no-ops in that case.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, startAt, durationSec, type = 'sine', peakGain = 0.12) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime + startAt);
+  gain.gain.linearRampToValueAtTime(peakGain, ctx.currentTime + startAt + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + durationSec);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(ctx.currentTime + startAt);
+  osc.stop(ctx.currentTime + startAt + durationSec + 0.02);
+}
+
+function playCorrectSound() {
+  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) { /* audio blocked, ignore */ }
+}
+function playIncorrectSound() {
+  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) { /* audio blocked, ignore */ }
+}
+function playStreakSound(streak) {
+  try {
+    // A short ascending arpeggio, one extra note for every milestone
+    // tier reached, so a 10-streak sounds bigger than a 3-streak.
+    const notes = [660, 880, 1046, 1318, 1568];
+    const tier = streak >= 10 ? 5 : streak >= 5 ? 4 : 3;
+    for (let i = 0; i < tier; i++) playTone(notes[i], i * 0.07, 0.16, 'triangle', 0.1);
+  } catch (_) { /* audio blocked, ignore */ }
+}
+
+// ---------------------------------------------------------------------
+// Toasts - the small pill that pops in from the top for streak/answer
+// feedback and for the meaning-hint warning. Reused for both so there's
+// one visual language for "something just happened" across the app.
+// ---------------------------------------------------------------------
+let toastTimeout = null;
+function showToast(text, variant = 'jade') {
+  const el = document.getElementById('streak-banner');
+  if (!el) return;
+  clearTimeout(toastTimeout);
+  el.textContent = text;
+  el.classList.remove('show', 'toast-jade', 'toast-warn', 'toast-big');
+  void el.offsetWidth; // restart the animation even if it's already showing
+  el.classList.add('show', variant === 'warn' ? 'toast-warn' : 'toast-jade');
+  toastTimeout = setTimeout(() => el.classList.remove('show'), 1700);
 }
 
 const mainEl = () => document.getElementById('main');
@@ -55,24 +126,19 @@ function go(hash) {
 }
 
 // ---------------------------------------------------------------------
-// Theme switcher - 10 cozy palettes, remembered per browser
+// Theme switcher - 4 cozy palettes, remembered per browser
 // ---------------------------------------------------------------------
 
 const THEMES = [
+  { id: 'ricepaper', name: 'Rice Paper', swatch: '#8a5a35' },
   { id: 'ink-seal', name: 'Ink & Seal', swatch: '#c1442d' },
   { id: 'teahouse', name: 'Tea House', swatch: '#c88a35' },
   { id: 'midnightjade', name: 'Midnight Jade', swatch: '#5f9c7a' },
   { id: 'plumlantern', name: 'Plum Lantern', swatch: '#c0567a' },
-  { id: 'bamboo', name: 'Bamboo Grove', swatch: '#6b8c42' },
-  { id: 'porcelain', name: 'Blue Porcelain', swatch: '#4a7ba7' },
-  { id: 'lotus', name: 'Lotus Pond', swatch: '#a85d8c' },
-  { id: 'rice', name: 'Rice Paper', swatch: '#d4c5a9' },
-  { id: 'lacquer', name: 'Red Lacquer', swatch: '#8b1538' },
-  { id: 'moonlight', name: 'Moonlight', swatch: '#7d8ca3' },
 ];
 
 function currentTheme() {
-  return localStorage.getItem('appTheme') || 'ink-seal';
+  return localStorage.getItem('appTheme') || 'ricepaper';
 }
 
 function applyTheme(id) {
@@ -157,10 +223,58 @@ window.addEventListener('DOMContentLoaded', render);
 
 function renderLanding() {
   mainEl().innerHTML = `
-    <div style="text-align:center; padding-top: 20px;">
-      <h1 style="font-size: 30px;">A quiet place to quiz</h1>
-      <p>Bring questions your AI chatbot wrote, share a code, see who understood the lesson.</p>
+    <nav class="nav-menu">
+      <a href="#home-top">Home</a>
+      <a href="#how-it-works">How It Works</a>
+      <a href="#features">Features</a>
+      <a href="#choose-role">Get Started</a>
+    </nav>
+
+    <div class="hero" id="home-top">
+      <div class="eyebrow">${icon('paper', 12)} A self-hosted classroom quiz tool</div>
+      <h1>A quiet place to quiz</h1>
+      <p class="lede">Bring questions your AI chatbot wrote, share a 6-digit code, and watch understanding show up in real time - no accounts required to take a quiz, no spreadsheets to grade by hand.</p>
     </div>
+
+    <div class="section-title" id="how-it-works">${icon('copy', 14)} How it works</div>
+    <div class="use-case-grid">
+      <div class="use-case-card">
+        <div class="step">01</div>
+        <h4>Teacher writes a quiz in minutes</h4>
+        <p>Paste your lesson material into any free AI chatbot with our ready-made prompt, then drop the JSON it returns straight into the app.</p>
+      </div>
+      <div class="use-case-card">
+        <div class="step">02</div>
+        <h4>Students join with a code</h4>
+        <p>No sign-up, no app download - just the 6-digit code and their name, then straight into the quiz with a single overall timer.</p>
+      </div>
+      <div class="use-case-card">
+        <div class="step">03</div>
+        <h4>Everyone sees results instantly</h4>
+        <p>Streaks and speed bonuses keep it fun while it's happening; the teacher's dashboard shows accuracy and full answer review right after.</p>
+      </div>
+    </div>
+
+    <div class="section-title" id="features">${icon('users', 14)} Built for a real classroom</div>
+    <div class="use-case-grid">
+      <div class="use-case-card">
+        <div class="step">${icon('clock', 16)}</div>
+        <h4>One quiz-wide timer</h4>
+        <p>A single countdown for the whole quiz, not per question - fairer for students who think longer on one hard character.</p>
+      </div>
+      <div class="use-case-card">
+        <div class="step">${icon('check', 16)}</div>
+        <h4>Streaks that feel like a game</h4>
+        <p>Consecutive correct answers trigger an on-screen streak animation, on top of a separate XP score built for fun, not grading.</p>
+      </div>
+      <div class="use-case-card">
+        <div class="step">${icon('paper', 16)}</div>
+        <h4>Two scores, two purposes</h4>
+        <p>An accuracy score out of 100 for the gradebook, and an uncapped XP score that rewards speed and streaks for the student.</p>
+      </div>
+    </div>
+
+    <div class="section-title" id="choose-role">${icon('arrowRight', 14)} Choose your role</div>
     <div class="choice-grid">
       <div class="choice-card" onclick="go('teacher')">
         <div class="icon">${icon('chalkboard', 30)}</div>
@@ -180,19 +294,120 @@ function renderLanding() {
 // Teacher: login
 // ---------------------------------------------------------------------
 
-function isTeacherLoggedIn() {
-  return !!localStorage.getItem('teacherKey');
+// ---------------------------------------------------------------------
+// Auth - shared between teacher and student accounts. One token/
+// profile pair lives in localStorage at a time; logging in as the
+// other role replaces it, same as any single-account browser session.
+// ---------------------------------------------------------------------
+
+function getAuth() {
+  const token = localStorage.getItem('authToken');
+  const profileRaw = localStorage.getItem('authProfile');
+  if (!token || !profileRaw) return null;
+  try {
+    return { token, profile: JSON.parse(profileRaw) };
+  } catch (_) {
+    return null;
+  }
 }
 
-function renderTeacherTopActions() {
-  topActionsEl().insertAdjacentHTML('beforeend', `
-    <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
-  `);
+function setAuth(token, profile) {
+  localStorage.setItem('authToken', token);
+  localStorage.setItem('authProfile', JSON.stringify(profile));
+}
+
+function clearAuth() {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('authProfile');
+}
+
+function logout() {
+  clearAuth();
+  go('');
+}
+
+function renderAccountBadge(profile) {
+  const lvl = profile.level;
+  return `
+    <div class="account-badge" title="${lvl.name}${lvl.nextName ? ` - ${Math.round(lvl.progress * 100)}% to ${lvl.nextName}` : ' - max level'}">
+      ${icon('star', 13)} <span>${escapeHtml(profile.username)}</span>
+      <span class="account-level">${escapeHtml(lvl.name)}</span>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="logout()">${icon('logout')} Sign out</button>
+  `;
+}
+
+function renderAuthScreen(role) {
+  let mode = 'login'; // toggled between 'login' and 'signup' without leaving the page
+
+  const draw = () => {
+    const isSignup = mode === 'signup';
+    mainEl().innerHTML = `
+      <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      <div class="card" style="max-width: 420px; margin: 20px auto;">
+        <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon(role === 'teacher' ? 'chalkboard' : 'student', 26)}</div>
+        <h2>${role === 'teacher' ? 'Teacher' : 'Student'} ${isSignup ? 'sign up' : 'log in'}</h2>
+        <p>${isSignup ? 'Create an account to get started.' : 'Welcome back - log in to continue.'}</p>
+        <form id="auth-form">
+          <div class="field">
+            <label>Username</label>
+            <input class="input" id="auth-username" placeholder="e.g. wei_ling" autofocus required maxlength="40" />
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input class="input" type="password" id="auth-password" placeholder="${isSignup ? 'At least 8 characters' : 'Password'}" required minlength="${isSignup ? 8 : 1}" />
+          </div>
+          <div id="auth-error" class="error-text"></div>
+          <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} ${isSignup ? 'Create account' : 'Log in'}</button>
+        </form>
+        <div style="margin-top: 14px; text-align:center;">
+          <button class="muted-link" id="auth-toggle-mode">${isSignup ? 'Already have an account? Log in' : "New here? Create an account"}</button>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('auth-toggle-mode').addEventListener('click', () => {
+      mode = isSignup ? 'login' : 'signup';
+      draw();
+    });
+
+    document.getElementById('auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const errorEl = document.getElementById('auth-error');
+      errorEl.textContent = '';
+      try {
+        const { token, profile } = isSignup
+          ? await Api.signup(username, password, role)
+          : await Api.login(username, password);
+        if (profile.role !== role) {
+          errorEl.textContent = `That account is a ${profile.role} account, not a ${role} account.`;
+          return;
+        }
+        setAuth(token, profile);
+        go(role);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+  };
+
+  draw();
+}
+
+// ---------------------------------------------------------------------
+// Teacher: dashboard
+// ---------------------------------------------------------------------
+
+function renderTeacherTopActions(profile) {
+  topActionsEl().insertAdjacentHTML('beforeend', renderAccountBadge(profile));
 }
 
 async function renderTeacher(rest) {
-  if (!isTeacherLoggedIn()) return renderTeacherLogin();
-  renderTeacherTopActions();
+  const auth = getAuth();
+  if (!auth || auth.profile.role !== 'teacher') return renderAuthScreen('teacher');
+  renderTeacherTopActions(auth.profile);
 
   const page = rest[0];
   if (!page) return renderTeacherDashboard();
@@ -200,48 +415,6 @@ async function renderTeacher(rest) {
   if (page === 'quiz' && rest[1]) return renderTeacherResults(rest[1]);
   return renderTeacherDashboard();
 }
-
-function renderTeacherLogin() {
-  mainEl().innerHTML = `
-    <div class="card" style="max-width: 420px; margin: 40px auto;">
-      <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('key', 26)}</div>
-      <h2>Teacher passcode</h2>
-      <p>The passcode you set in your .env file when you set up the app.</p>
-      <form id="login-form">
-        <div class="field">
-          <input class="input" type="password" id="passcode" placeholder="Passcode" autofocus required />
-        </div>
-        <div id="login-error" class="error-text"></div>
-        <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Enter dashboard</button>
-      </form>
-      <div style="margin-top: 14px; text-align:center;">
-        <button class="muted-link" onclick="go('')">Back home</button>
-      </div>
-    </div>
-  `;
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const passcode = document.getElementById('passcode').value;
-    const errorEl = document.getElementById('login-error');
-    errorEl.textContent = '';
-    try {
-      await Api.login(passcode);
-      localStorage.setItem('teacherKey', passcode);
-      go('teacher');
-    } catch (err) {
-      errorEl.textContent = err.message;
-    }
-  });
-}
-
-function teacherLogout() {
-  localStorage.removeItem('teacherKey');
-  go('');
-}
-
-// ---------------------------------------------------------------------
-// Teacher: dashboard
-// ---------------------------------------------------------------------
 
 async function renderTeacherDashboard() {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading your quizzes…</p></div>`;
@@ -397,9 +570,9 @@ async function renderTeacherResults(quizId) {
     </label>
 
     <div class="field" style="max-width:260px; margin-bottom:24px;">
-      <label>Time limit per question (seconds)</label>
+      <label>Total time limit for the whole quiz (seconds)</label>
       <input class="input" type="number" min="0" step="1" id="time-limit-input" value="${quiz.timeLimitSeconds || 0}" placeholder="0 = off" />
-      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. When set, a correct answer scores up to 50% bonus for answering quickly - like a game.</p>
+      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. One countdown for the entire quiz, not per question. A correct answer's XP score gets up to +50% for answering early, plus a streak bonus for consecutive correct answers - accuracy score (the gradebook number) is never affected.</p>
     </div>
 
     <div class="section-title">${icon('users', 14)} ${attempts.length} response${attempts.length === 1 ? '' : 's'}</div>
@@ -427,7 +600,7 @@ function renderAttemptRow(quiz, attempt) {
   const pending = !attempt.submittedAt;
   const seal = pending
     ? `<div class="seal"><span class="seal-score">…</span><span class="seal-total">in progress</span></div>`
-    : `<div class="seal ${attempt.score / attempt.total >= 0.6 ? 'jade' : ''}"><span class="seal-score">${attempt.score}</span><span class="seal-total">of ${attempt.total}</span></div>`;
+    : `<div class="seal ${attempt.accuracyScore >= 60 ? 'jade' : ''}"><span class="seal-score">${attempt.accuracyScore}</span><span class="seal-total">of 100</span></div>`;
 
   const reviewId = `review-${attempt.id}`;
 
@@ -436,8 +609,11 @@ function renderAttemptRow(quiz, attempt) {
       <div style="display:flex; align-items:center; gap:16px; width:100%;">
         ${seal}
         <div class="attempt-info">
-          <div class="attempt-name">${escapeHtml(attempt.studentName)}</div>
-          <div class="attempt-meta">${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}</div>
+          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.studentLevel ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.studentLevel.name)}</span>` : ''}</div>
+          <div class="attempt-meta">
+            ${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}
+            ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
+          </div>
         </div>
         ${!pending ? `<button class="btn btn-ghost btn-sm" onclick="toggleReview('${reviewId}')">${icon('paper', 14)} Review</button>` : ''}
       </div>
@@ -495,7 +671,15 @@ function getQueryParam(name) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
+function renderStudentTopActions(profile) {
+  topActionsEl().insertAdjacentHTML('beforeend', renderAccountBadge(profile));
+}
+
 function renderStudent(rest) {
+  const auth = getAuth();
+  if (!auth || auth.profile.role !== 'student') return renderAuthScreen('student');
+  renderStudentTopActions(auth.profile);
+
   const page = rest[0];
   if (page === 'quiz') return renderStudentQuiz();
   if (page === 'done') return renderStudentDone();
@@ -504,31 +688,17 @@ function renderStudent(rest) {
 
 function renderStudentJoin() {
   const prefillCode = getQueryParam('code');
-  const savedStudent = Api.getStudentSession();
-  
   mainEl().innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
     <div class="card" style="max-width: 420px; margin: 20px auto;">
       <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('student', 26)}</div>
       <h2>Join a quiz</h2>
       <p>Ask your teacher for the 6-digit code.</p>
-      ${savedStudent ? `
-        <div style="background:var(--surface-alt); padding:12px; border-radius:var(--radius-sm); margin-bottom:16px; font-size:13px;">
-          Logged in as <strong>${escapeHtml(savedStudent.name)}</strong>
-          <button class="btn btn-ghost btn-sm" style="float:right; padding:2px 8px;" onclick="Api.clearStudentSession(); renderStudentJoin()">Switch</button>
-        </div>
-      ` : ''}
       <form id="join-form">
         <div class="field">
           <label>Quiz code</label>
           <input class="input input-code" id="join-code" maxlength="6" inputmode="numeric" placeholder="000000" value="${escapeHtml(prefillCode)}" required />
         </div>
-        ${!savedStudent ? `
-          <div class="field">
-            <label>Your name</label>
-            <input class="input" id="join-name" placeholder="e.g. Wei Ling" required maxlength="60" />
-          </div>
-        ` : ''}
         <div id="join-error" class="error-text"></div>
         <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Start quiz</button>
       </form>
@@ -540,27 +710,16 @@ function renderStudentJoin() {
     const code = document.getElementById('join-code').value.trim();
     const errorEl = document.getElementById('join-error');
     errorEl.textContent = '';
-    
     try {
-      let result;
-      if (savedStudent) {
-        // Use saved student account
-        result = await Api.joinQuiz(code, null, null, savedStudent.id);
-      } else {
-        const name = document.getElementById('join-name').value.trim();
-        result = await Api.joinQuiz(code, name, null, null);
-        // Save student session if they have an account
-        if (result.student && result.student.hasPin) {
-          Api.saveStudentSession(result.student.id, result.student.name, true);
-        }
-      }
-      
-      state.studentAttemptId = result.attemptId;
-      state.studentQuiz = result.quiz;
+      const { attemptId, quiz } = await Api.joinQuiz(code);
+      state.studentAttemptId = attemptId;
+      state.studentQuiz = quiz;
       state.studentAnswers = {};
       state.studentQuestionIndex = 0;
       state.studentMeaningOn = false;
-      state.studentQuestionStartTimes = {};
+      state.studentQuizStartedAt = Date.now();
+      state.studentStreak = 0;
+      state.studentBestStreak = 0;
       go('student/quiz');
     } catch (err) {
       errorEl.textContent = err.message;
@@ -574,7 +733,7 @@ function renderStudentJoin() {
 
 function renderStudentQuiz() {
   if (!state.studentQuiz) return go('student/join');
-  clearQuestionTimer();
+  clearQuizTimer();
 
   const quiz = state.studentQuiz;
   const i = state.studentQuestionIndex;
@@ -586,30 +745,34 @@ function renderStudentQuiz() {
   const showMeaning = state.studentMeaningOn && (q.questionMeaning || q.optionMeanings);
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
 
-  // Only stamped the first time this question is shown - re-renders
-  // from selecting an option, toggling meaning, etc. don't reset it.
-  if (timeLimitSeconds > 0 && state.studentQuestionStartTimes[q.id] === undefined) {
-    state.studentQuestionStartTimes[q.id] = Date.now();
-  }
-
-  const optionsHtml = q.options.map((opt, idx) => `
-    <div class="option ${currentValue === opt ? 'selected' : ''}" data-option-index="${idx}">
+  const optionsHtml = q.options.map((opt, idx) => {
+    let feedbackClass = '';
+    if (currentAnswer && currentValue === opt) {
+      feedbackClass = currentAnswer.correct ? 'answered-correct' : 'answered-incorrect';
+    }
+    return `
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
       <span class="option-marker"></span>
       <span>
         <span>${escapeHtml(opt)}</span>
         ${showMeaning && q.optionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
       </span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   mainEl().innerHTML = `
     <div class="progress-track"><div class="progress-fill" style="width:${((i + 1) / total) * 100}%"></div></div>
 
     ${timeLimitSeconds > 0 ? `
       <div class="timer-row">
-        <span>${icon('clock', 14)} Answer quickly for a speed bonus</span>
+        <span>${icon('clock', 14)} One timer for the whole quiz - answer quickly for a bigger bonus</span>
         <span id="timer-value">${timeLimitSeconds}s</span>
       </div>
       <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
+    ` : ''}
+
+    ${state.studentStreak > 0 ? `
+      <div class="streak-track"><span class="streak-flame">${icon('check', 14)}</span> ${state.studentStreak} in a row</div>
     ` : ''}
 
     <label class="switch-label" id="meaning-toggle-label">
@@ -643,57 +806,80 @@ function renderStudentQuiz() {
   });
 
   document.getElementById('meaning-toggle').addEventListener('change', (e) => {
-    const isChecked = e.target.checked;
-    if (isChecked && !state.studentMeaningOn) {
-      // Show warning notification when turning meaning ON
-      if (!confirm('⚠️ Warning: Using the meaning hint will reduce your score by 50% for correct answers.\n\nAre you sure you want to turn on the meaning hints?')) {
-        e.target.checked = false;
-        return;
-      }
-    }
-    state.studentMeaningOn = isChecked;
+    state.studentMeaningOn = e.target.checked;
+    if (state.studentMeaningOn) showToast('Meaning shown - correct answers now worth 50% credit', 'warn');
     renderStudentQuiz();
   });
 
-  if (timeLimitSeconds > 0) startQuestionTimer(q.id, timeLimitSeconds, isLast);
+  if (timeLimitSeconds > 0) startQuizTimer(timeLimitSeconds, isLast);
 }
 
-// Ticks the visible countdown for the current question. Reads the
-// fixed start time stamped in renderStudentQuiz rather than counting
-// its own elapsed time, so re-renders (selecting an option, toggling
-// meaning) never reset or double-count the clock.
-function startQuestionTimer(questionId, timeLimitSeconds, isLast) {
-  const startedAt = state.studentQuestionStartTimes[questionId];
+// Ticks the visible countdown for the WHOLE quiz. Reads the fixed
+// studentQuizStartedAt stamped at join time rather than counting its
+// own elapsed time, so re-renders (selecting an option, moving
+// between questions, toggling meaning) never reset or double-count
+// the clock - it's the same clock from the first question to the last.
+function startQuizTimer(timeLimitSeconds, isLast) {
   const limitMs = timeLimitSeconds * 1000;
 
   const tick = () => {
     const valueEl = document.getElementById('timer-value');
     const fillEl = document.getElementById('timer-fill');
     if (!valueEl || !fillEl) {
-      // The student navigated away from this question already -
-      // nothing left to update, stop ticking.
-      clearQuestionTimer();
+      // Navigated to a different route entirely - nothing left to
+      // update, stop ticking.
+      clearQuizTimer();
       return;
     }
-    const remainingMs = Math.max(0, limitMs - (Date.now() - startedAt));
+    const remainingMs = Math.max(0, limitMs - (Date.now() - state.studentQuizStartedAt));
     valueEl.textContent = `${Math.ceil(remainingMs / 1000)}s`;
     fillEl.style.width = `${(remainingMs / limitMs) * 100}%`;
 
     if (remainingMs <= 0) {
-      clearQuestionTimer();
+      clearQuizTimer();
       valueEl.textContent = "Time's up";
-      setTimeout(() => { isLast ? studentSubmit() : studentNext(); }, 900);
+      setTimeout(() => studentSubmit(), 900);
     }
   };
   tick();
-  questionTimerInterval = setInterval(tick, 250);
+  quizTimerInterval = setInterval(tick, 250);
 }
 
-function selectAnswer(questionId, value) {
-  const startedAt = state.studentQuestionStartTimes[questionId];
-  const timeTakenMs = typeof startedAt === 'number' ? Date.now() - startedAt : undefined;
-  state.studentAnswers[questionId] = { value, usedMeaning: state.studentMeaningOn, timeTakenMs };
+async function selectAnswer(questionId, value) {
+  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+
+  // Optimistic local update so the option highlights immediately;
+  // corrected below once the server confirms right/wrong.
+  state.studentAnswers[questionId] = { value, usedMeaning: state.studentMeaningOn, answeredAtMs, correct: null };
   renderStudentQuiz();
+
+  try {
+    const { correct } = await Api.checkAnswer(state.studentAttemptId, questionId, value, state.studentMeaningOn, answeredAtMs);
+    state.studentAnswers[questionId] = { value, usedMeaning: state.studentMeaningOn, answeredAtMs, correct };
+
+    if (correct) {
+      state.studentStreak += 1;
+      state.studentBestStreak = Math.max(state.studentBestStreak, state.studentStreak);
+      if (state.studentStreak === 3 || state.studentStreak === 5 || (state.studentStreak >= 10 && state.studentStreak % 5 === 0)) {
+        showToast(state.studentStreak >= 10 ? `${state.studentStreak} streak!!` : `${state.studentStreak} in a row!`, 'jade');
+        playStreakSound(state.studentStreak);
+      } else {
+        showToast('Correct!', 'jade');
+        playCorrectSound();
+      }
+    } else {
+      state.studentStreak = 0;
+      playIncorrectSound();
+    }
+  } catch (err) {
+    // If the check request fails (e.g. flaky connection), leave the
+    // answer recorded locally with correct:null - it still counts
+    // toward the final score at submit, it just won't animate now.
+  }
+
+  // Re-render so the option's right/wrong border and the streak
+  // track reflect what the server said.
+  if (state.studentQuiz.questions[state.studentQuestionIndex].id === questionId) renderStudentQuiz();
 }
 
 function studentNext() {
@@ -709,6 +895,17 @@ function studentPrev() {
 async function studentSubmit() {
   const result = await Api.submitAttempt(state.studentAttemptId, state.studentAnswers);
   state.studentResult = result;
+
+  // The submit response carries the student's new running total - keep
+  // the cached profile in sync so the account badge and next screen
+  // both show the up-to-date level without an extra request.
+  const auth = getAuth();
+  if (auth) {
+    auth.profile.xpTotal = result.xpTotal;
+    auth.profile.level = result.level;
+    setAuth(auth.token, auth.profile);
+  }
+
   go('student/done');
 }
 
@@ -718,14 +915,33 @@ function renderStudentDone() {
 
   mainEl().innerHTML = `
     <div style="text-align:center; padding-top: 30px;">
-      <div class="seal ${result.score / result.total >= 0.6 ? 'jade' : ''}" style="margin: 0 auto 20px;">
-        <span class="seal-score">${result.score}</span>
-        <span class="seal-total">of ${result.total}</span>
+      ${result.leveledUp ? `
+        <div class="level-up-banner">${icon('star', 16)} Level up! You're now <strong>${escapeHtml(result.level.name)}</strong></div>
+      ` : ''}
+      <div class="score-pair" style="margin-bottom:20px;">
+        <div class="score-block">
+          <div class="seal ${result.accuracyScore >= 60 ? 'jade' : ''}">
+            <span class="seal-score">${result.accuracyScore}</span>
+            <span class="seal-total">of 100</span>
+          </div>
+          <div class="score-label">Accuracy</div>
+        </div>
+        <div class="score-block">
+          <div class="xp-badge">${icon('check', 14)} ${result.xpScore} XP</div>
+          <div class="score-label">Game score</div>
+        </div>
       </div>
+
+      <div class="level-progress" style="max-width:340px; margin:0 auto 24px;">
+        <div class="streak-track" style="justify-content:center; margin-bottom:6px;">${icon('star', 13)} ${escapeHtml(result.level.name)} &middot; ${result.xpTotal} XP total</div>
+        <div class="timer-track"><div class="timer-fill" style="width:${Math.round(result.level.progress * 100)}%; background:var(--accent);"></div></div>
+        ${result.level.nextName ? `<div class="score-label" style="margin-top:6px;">${Math.round(result.level.progress * 100)}% to ${escapeHtml(result.level.nextName)}</div>` : `<div class="score-label" style="margin-top:6px;">Top level reached</div>`}
+      </div>
+
       <h2>Quiz submitted</h2>
       <p>
         Your teacher can see your result now.
-        ${result.score > result.total ? ' Nice - you answered fast enough to earn a speed bonus.' : ''}
+        ${result.longestStreak >= 3 ? ` Best streak: ${result.longestStreak} in a row.` : ''}
         ${result.meaningUsedCount ? ` Meaning was shown on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
       </p>
       <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>

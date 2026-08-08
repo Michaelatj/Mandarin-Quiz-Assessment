@@ -3,8 +3,9 @@
 A small, self-hosted quiz tool. You write no quiz content yourself - you
 hand your lesson material to any free AI chatbot with a ready-made prompt,
 paste the JSON it gives back into this app, and share a 6-digit code with
-your students. They type their name (no email, no account) and take the
-quiz. You see every result on one page.
+your students. They log into their own account and take the quiz -
+correct streaks earn an on-screen animation, and XP carries over between
+quizzes into a persistent level. You see every result on one page.
 
 There is no paid AI API anywhere in this app. The chatbot step happens on
 whatever free chatbot website you already use, in your own browser tab.
@@ -43,21 +44,42 @@ npm install
 This downloads the small set of libraries the server uses (Express,
 etc.) into a `node_modules` folder. It only needs to be done once.
 
-## Step 3 - Set your passcode
+## Step 3 - Set up your database (Supabase) and accounts
 
-The app has one setting you must choose: the passcode that unlocks
-your teacher dashboard. It is not an email/password account - just a
-shared secret between you and your browser, since this is a personal
-tool for one teacher.
+This app stores everything - quizzes, questions, results, student
+levels - in a free Supabase Postgres database, and uses real
+username/password accounts for both teachers and students (not a
+shared passcode). Setup:
 
-1. Copy `.env.example` to a new file named `.env` in the same folder.
-2. Open `.env` in any text editor and change `TEACHER_PASSCODE` to
-   something only you know.
+1. Go to https://supabase.com, sign up free, and create a new project.
+2. Once it's ready, open the **SQL Editor** in the left sidebar,
+   click **New query**, paste in the entire contents of
+   `supabase/schema.sql` from this folder, and click **Run**. This
+   creates the tables the app needs - you only do this once.
+3. In the sidebar, go to **Project Settings -> API**. You'll need two
+   values from that page: the **Project URL**, and the
+   **service_role** key (not the "anon" key - the service_role one,
+   which is secret and should never be shared or committed to git).
+4. Copy `.env.example` to a new file named `.env` in this folder, and
+   fill in the three values:
 
 ```
-TEACHER_PASSCODE=your-own-passcode-here
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
+JWT_SECRET=some-long-random-string
 PORT=3000
 ```
+
+For `JWT_SECRET`, anything long and random works - it's what signs
+login sessions. One easy way to generate one:
+
+```
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Once `.env` is filled in, both teachers and students create their own
+account from the app itself (username + password, at least 8
+characters) - there's nothing else to configure.
 
 ## Step 4 - Run it
 
@@ -83,7 +105,8 @@ on the internet so students can reach it from their own devices.
 
 ## Writing a quiz (no typing questions by hand)
 
-1. In the app, choose **I'm the teacher**, enter your passcode.
+1. In the app, choose **I'm the teacher**, then log in (or create an
+   account the first time - just a username and password).
 2. Click **New quiz**. The page shows a ready-made prompt.
 3. Pick the **HSK level** your students are at - it's inserted into
    the prompt automatically, so the chatbot keeps vocabulary near
@@ -169,25 +192,60 @@ page regardless of this setting, since it's only stripped from what
 students see. It can be flipped at any time, including for a quiz
 students are already using.
 
-### Time limit and speed bonus
+### Time limit, streaks, and the two scores
 
-Also on the results page: a **time limit per question (seconds)**
-field, 0 by default (off). Set it to something like 20 or 30 and two
-things happen for anyone who joins afterward:
+Also on the results page: a **total time limit for the whole quiz
+(seconds)** field, 0 by default (off). Set it to something like 120
+and one countdown starts the moment a student joins and runs for
+their entire attempt - not per question. If it hits zero, whatever
+they've answered so far is submitted automatically.
 
-- A countdown appears above each question. If it hits zero, the app
-  moves on to the next question automatically - answered or not.
-- Answering correctly within the limit now earns a small bonus on top
-  of that question's normal points - up to +50% for an instant
-  answer, tapering down to +0% right at the limit. This is on top of
-  the usual score, not swapped in for it, so a fast student's total
-  can end up higher than the quiz's max - that's intended, it's what
-  makes it feel like a score to chase rather than just a grade. The
-  "show meaning" half-credit penalty still applies on top of this if
-  they used it.
+While taking the quiz, each answer is checked instantly (not just at
+the end), so a student sees right away whether they got it right, and
+a row of consecutive correct answers triggers a small on-screen streak
+animation - a fun nudge, nothing that affects grading.
 
-Like the other settings, this can be changed any time and only
-affects students who join afterward.
+Because "fast and streaky" and "accurate" are different things worth
+measuring differently, each attempt now gets two numbers instead of
+one:
+
+- **Accuracy score (0-100)** - correct answers out of total, exactly
+  comparable across students and quizzes. This is the one to use for
+  a gradebook. Never affected by speed, streaks, or the timer.
+- **XP score** - uncapped and playful. Correct answers earn their
+  normal points, plus up to +50% for answering early (only when the
+  timer is on), plus up to +50% more the longer a streak runs. This
+  is the number meant to be chased, not compared - a fast student's
+  XP can end up well above the quiz's raw point total, on purpose.
+
+The "show meaning" half-credit penalty still applies to both numbers
+if a student used it. Like the other settings, the time limit can be
+changed at any time and only affects students who join afterward.
+
+### Levels - XP that persists across every quiz
+
+A student's XP score from each quiz they submit is added to a running
+total on their account - it doesn't reset between quizzes. That total
+determines their **level**, shown as a small badge next to their name
+in the app and on your results page, with a progress bar toward the
+next tier shown right after they submit a quiz.
+
+The level names themselves live in `levels.js` at the root of this
+project, deliberately kept in one small, easy-to-find file:
+
+```js
+const LEVELS = [
+  { name: '童生 Beginner', minXp: 0 },
+  { name: '秀才 Scholar', minXp: 100 },
+  { name: '举人 Graduate', minXp: 300 },
+  { name: '进士 Master', minXp: 700 },
+  { name: '状元 Grandmaster', minXp: 1500 },
+];
+```
+
+Rename the tiers, add more, or change the thresholds freely - just
+keep them in ascending `minXp` order. Restart `npm start` after
+editing for the change to take effect.
 
 ### Retakes and shuffling
 
@@ -259,11 +317,12 @@ them to check with you.
 After you create a quiz, its page shows a 6-digit **join code**. Give
 that code to your students (write it on the board, put it in a group
 chat, whatever you already use). They go to the site, choose
-**I'm a student**, enter the code and their name, and take the quiz.
+**I'm a student**, log into their account (or create one the first
+time), enter the code, and take the quiz.
 
-Come back to that quiz's page any time to see everyone's score. Click
-**Review** on any response to see question-by-question right/wrong,
-and to grade short-answer questions by hand.
+Come back to that quiz's page any time to see everyone's score - each
+student's current level shows next to their name. Click **Review** on
+any response to see question-by-question right/wrong.
 
 ---
 
@@ -278,48 +337,44 @@ web host instead. Any Node.js host works; two straightforward options:
 1. Push this folder to a GitHub repository (Render deploys from Git).
 2. On Render, create a new "Web Service", point it at that repo.
 3. Build command: `npm install`. Start command: `npm start`.
-4. Add an environment variable `TEACHER_PASSCODE` with your passcode
-   in Render's dashboard (don't upload your `.env` file - Render's
-   free tier already gives you a place to set this safely).
+4. In Render's dashboard, add the same three environment variables
+   from your `.env` file - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `JWT_SECRET` (don't upload your `.env` file itself; Render's
+   dashboard is the safe place to set secrets).
 5. Render gives you a public URL - that's what you share.
 
 **Railway.app** (free trial credit, then usage-based)
-Same idea: connect the repo, set `TEACHER_PASSCODE` as an environment
-variable, deploy.
+Same idea: connect the repo, set the same three environment
+variables, deploy.
 
-### A limitation worth knowing about free hosting
+### About persistence
 
-This app stores quizzes and results in one file (`data/db.json`) on
-whatever server it's running on - there's no separate database to set
-up. That's what makes it simple to run, but on **some** free hosts
-(notably Render's free tier), the filesystem resets on every restart
-or redeploy, which would erase your data. Ways around this:
-
-- Simplest: run the app on a machine you control and leave it on
-  (an old laptop, a Raspberry Pi, a low-cost always-on VPS).
-- On Render: use a paid instance with a persistent disk, or a host
-  that offers a free persistent volume (Railway and Fly.io both have
-  small free volumes at the time of writing - check their current
-  free-tier terms, since these change).
-- If you outgrow the single-file approach entirely, swapping in a
-  free hosted database (like Supabase's free Postgres tier) is a
-  bigger but doable change to `db.js`.
-
-For a single class, running it locally during class time or on a
-spare always-on machine is usually the easiest path.
+Because everything lives in Supabase's Postgres rather than a file on
+the host's own disk, this app has none of the "free host wipes the
+filesystem on restart" problem a simpler setup would have - your
+quizzes, accounts, and student XP all survive redeploys, restarts, and
+switching hosts entirely, since none of it lives on the web host at
+all. The only thing to keep safe is your `.env` file (specifically the
+Supabase service-role key and JWT secret) - anyone with those could
+read or write your database directly, so treat it like a password and
+never commit it to a public repo.
 
 ---
 
 ## Choosing a theme
 
-The palette icon in the top-right corner switches between 4 cozy dark
-themes. Each one changes more than just the accent color - the corner
+The palette icon in the top-right corner switches between 5 themes.
+Each one changes more than just the accent color - the corner
 rounding, borders, heading typeface, and the shape of the seal badge
 on scores all shift too, so they genuinely feel different rather than
 being the same layout recolored:
 
-- **Ink & Seal** (default) - espresso surfaces, seal-stamp red, a
-  round stamp, a Chinese serif for headings.
+- **Rice Paper** (default) - a light editorial theme: cream and
+  white surfaces, a warm caramel accent, minimal-radius corners and a
+  Playfair Display headline face. Closer to a printed magazine page
+  than the other four.
+- **Ink & Seal** - espresso surfaces, seal-stamp red, a round stamp,
+  a Chinese serif for headings.
 - **Tea House** - cocoa and amber, dashed "paper edge" borders, a
   literary serif, gently rounded corners.
 - **Midnight Jade** - near-black green and jade, sharp architectural
@@ -334,7 +389,7 @@ Your choice is remembered in that browser, no restart needed.
 
 ## Troubleshooting
 
-**"Failed to load resource: 405" on `/api/teacher/login`, or the login
+**"Failed to load resource: 405" on `/api/auth/login`, or the login
 page doesn't work at all.**
 This almost always means the app is being opened the wrong way - for
 example through a VS Code "Live Server" extension (usually on port
@@ -350,19 +405,31 @@ An earlier copy of the server is still running in another terminal
 window (or was left running in the background). Close that terminal,
 or stop the process, then try again.
 
-**The passcode in `.env` doesn't seem to work.**
-Make sure you copied `.env.example` to a file literally named `.env`
-(not `.env.example` still, and not `.env.txt`), that it sits in the
-same folder as `server.js`, and that you restarted `npm start` after
-editing it - the app only reads `.env` when it starts up. Editing
-`.env.example` itself does nothing; the app never reads that file,
-it's only there as a template to copy from.
+**The server prints "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
+and exits immediately.**
+Your `.env` file is missing, misnamed, or missing one of those two
+values. Make sure you copied `.env.example` to a file literally named
+`.env` (not `.env.example` still, and not `.env.txt`), that it sits in
+the same folder as `server.js`, and that the values are copied from
+your Supabase project's **Project Settings -> API** page (the
+**service_role** key specifically, not the "anon" key).
+
+**Signup or login returns "Something went wrong on the server."**
+This means the request reached the server but the database call
+failed - almost always because `supabase/schema.sql` hasn't been run
+in your Supabase project's SQL editor yet, or the URL/key in `.env`
+don't match the project you ran it in. Check the server's terminal
+output for the actual error underneath that message.
 
 ---
 
 ## A note on data
 
-Everything - every quiz and every student response - lives in
-`data/db.json` in this folder. There's no cloud account involved, no
-analytics, nothing phoning home. Back that file up yourself if you
-care about keeping old results (just copy it somewhere safe).
+Everything - every account, quiz, and student response - lives in
+your own Supabase project's Postgres database, not on whatever server
+happens to be running the app. There's no analytics and nothing else
+phoning home. Passwords are hashed (bcrypt) before they're ever
+stored - the app itself never sees or logs a plain-text password after
+the request that created it. Back up your data by using Supabase's
+own backup/export tools on your project, same as you would for any
+Postgres database.

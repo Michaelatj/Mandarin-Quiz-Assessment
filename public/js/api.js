@@ -1,21 +1,22 @@
 // api.js
 //
-// Every request goes through here so the teacher passcode header and
-// error handling live in one place.
+// Every request goes through here so the auth token and error
+// handling live in one place. There's one shared "authToken" in
+// localStorage - whichever account (teacher or student) most
+// recently logged in - since a browser is only ever one person at a
+// time in this app.
 
 const Api = (() => {
-  function teacherKey() {
-    return localStorage.getItem('teacherKey') || '';
-  }
-  
-  function studentData() {
-    const data = localStorage.getItem('studentData');
-    return data ? JSON.parse(data) : null;
+  function authToken() {
+    return localStorage.getItem('authToken') || '';
   }
 
   async function request(method, url, body, opts = {}) {
     const headers = { 'Content-Type': 'application/json' };
-    if (opts.asTeacher) headers['x-teacher-key'] = teacherKey();
+    if (opts.auth !== false) {
+      const token = authToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }
 
     const res = await fetch(url, {
       method,
@@ -37,36 +38,24 @@ const Api = (() => {
   }
 
   return {
-    // Teacher auth
-    login: (passcode) => request('POST', '/api/teacher/login', { passcode }),
-    registerTeacher: (name, username, password, ownerKey) => 
-      request('POST', '/api/teacher/register', { name, username, password, ownerKey }),
-    getTeachers: () => request('GET', '/api/teachers', undefined, { asTeacher: true }),
-    deleteTeacher: (id) => request('DELETE', `/api/teachers/${id}`, undefined, { asTeacher: true }),
-
-    // Student accounts
-    registerStudent: (name, pin) => request('POST', '/api/students/register', { name, pin }),
-    getStudents: () => request('GET', '/api/students', undefined, { asTeacher: true }),
-    
-    // Save/load student session data
-    saveStudentSession: (studentId, name, hasPin) => {
-      localStorage.setItem('studentData', JSON.stringify({ id: studentId, name, hasPin }));
-    },
-    getStudentSession: () => studentData(),
-    clearStudentSession: () => localStorage.removeItem('studentData'),
+    // Auth - shared by both roles, `role` is 'teacher' or 'student'
+    signup: (username, password, role) => request('POST', '/api/auth/signup', { username, password, role }, { auth: false }),
+    login: (username, password) => request('POST', '/api/auth/login', { username, password }, { auth: false }),
+    me: () => request('GET', '/api/auth/me'),
 
     // Teacher quiz management
-    listQuizzes: () => request('GET', '/api/quizzes', undefined, { asTeacher: true }),
-    createQuiz: (quizJson) => request('POST', '/api/quizzes', quizJson, { asTeacher: true }),
-    getQuiz: (id) => request('GET', `/api/quizzes/${id}`, undefined, { asTeacher: true }),
-    deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`, undefined, { asTeacher: true }),
-    updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings, { asTeacher: true }),
-    getResults: (id) => request('GET', `/api/quizzes/${id}/results`, undefined, { asTeacher: true }),
+    listQuizzes: () => request('GET', '/api/quizzes'),
+    createQuiz: (quizJson) => request('POST', '/api/quizzes', quizJson),
+    getQuiz: (id) => request('GET', `/api/quizzes/${id}`),
+    deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`),
+    updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings),
+    getResults: (id) => request('GET', `/api/quizzes/${id}/results`),
 
     // Student flow
-    peekQuiz: (code) => request('GET', `/api/join/${code}`),
-    joinQuiz: (code, studentName, studentPin, studentId) => 
-      request('POST', `/api/join/${code}`, { studentName, studentPin, studentId }),
+    peekQuiz: (code) => request('GET', `/api/join/${code}`, undefined, { auth: false }),
+    joinQuiz: (code) => request('POST', `/api/join/${code}`, {}),
     submitAttempt: (attemptId, answers) => request('POST', `/api/attempts/${attemptId}/submit`, { answers }),
+    checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs) =>
+      request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs }),
   };
 })();

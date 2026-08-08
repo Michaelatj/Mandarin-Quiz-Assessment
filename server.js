@@ -1,167 +1,128 @@
 // server.js
 //
 // One Express app that serves both the API and the static frontend
-// (the public/ folder). Nothing else to run - one process, one port.
+// (the public/ folder). Data lives in Supabase Postgres (see db.js
+// and supabase/schema.sql) instead of a local JSON file. Auth is our
+// own username/password system - bcrypt-hashed passwords in the
+// `profiles` table, our own signed JWT for sessions - not Supabase
+// Auth, which is built around email addresses rather than usernames.
 
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { nanoid } = require('nanoid');
 const db = require('./db');
+const { computeLevel } = require('./levels');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const TEACHER_PASSCODE = process.env.TEACHER_PASSCODE || 'change-me-please';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  console.error('Missing JWT_SECRET in your .env file. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  process.exit(1);
+}
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ---------------------------------------------------------------------
-// Teacher auth - supports both single passcode (legacy) and multi-teacher
-// ---------------------------------------------------------------------
-
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(password).digest('hex');
-}
-
-function requireTeacher(req, res, next) {
-  const key = req.get('x-teacher-key');
-  // Legacy single-teacher mode
-  if (key && key === TEACHER_PASSCODE && TEACHER_PASSCODE !== 'change-me-please') {
-    return next();
-  }
-  // Multi-teacher mode with session token
-  if (!key) {
-    return res.status(401).json({ error: 'Missing authentication.' });
-  }
-  const state = db.load();
-  const teacher = state.teachers.find(t => t.sessionToken === key);
-  if (!teacher) {
-    return res.status(401).json({ error: 'Invalid session.' });
-  }
-  req.teacher = teacher;
-  next();
-}
-
-app.post('/api/teacher/login', (req, res) => {
-  const { passcode, username, password } = req.body || {};
-  
-  // Legacy single passcode login
-  if (passcode && passcode === TEACHER_PASSCODE && TEACHER_PASSCODE !== 'change-me-please') {
-    return res.json({ ok: true, legacyMode: true, teacherKey: passcode });
-  }
-  
-  // Multi-teacher login
-  if (username && password) {
-    const state = db.load();
-    const teacher = state.teachers.find(t => t.username === username);
-    if (!teacher) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
-    if (teacher.passwordHash !== hashPassword(password)) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
-    const sessionToken = nanoid(32);
-    db.update(state => {
-      const t = state.teachers.find(tea => tea.id === teacher.id);
-      t.sessionToken = sessionToken;
-    });
-    return res.json({ 
-      ok: true, 
-      teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
-      teacherKey: sessionToken 
-    });
-  }
-  
-  return res.status(400).json({ error: 'Invalid login request.' });
+// Express 4 does not catch rejected promises from an async route
+// handler (or async middleware, like requireAuth below) on its own -
+// an unhandled rejection there crashes the ENTIRE process, taking
+// down every other student and teacher connected at the time. This
+// wraps every handler passed to app.get/post/patch/delete so a
+// Supabase hiccup becomes a normal error response instead - see the
+// error-handling middleware at the bottom of this file, which turns
+// the passed-through error into JSON.
+['get', 'post', 'patch', 'delete'].forEach((method) => {
+  const original = app[method].bind(app);
+  app[method] = (routePath, ...handlers) => original(
+    routePath,
+    ...handlers.map((h) => (h.constructor.name === 'AsyncFunction'
+      ? (req, res, next) => Promise.resolve(h(req, res, next)).catch(next)
+      : h))
+  );
 });
 
-app.post('/api/teacher/register', (req, res) => {
-  const { name, username, password, ownerKey } = req.body || {};
-  
-  if (!name || !username || !password) {
-    return res.status(400).json({ error: 'Name, username, and password are required.' });
-  }
-  if (username.length < 3 || password.length < 4) {
-    return res.status(400).json({ error: 'Username must be 3+ chars, password 4+ chars.' });
-  }
-  
-  const state = db.load();
-  
-  // Check if owner exists and validate ownerKey for first registration
-  const owners = state.teachers.filter(t => t.isOwner);
-  if (owners.length === 0) {
-    // First teacher becomes owner
-    const teacher = {
-      id: nanoid(12),
-      name: name.trim(),
-      username: username.trim().toLowerCase(),
-      passwordHash: hashPassword(password),
-      createdAt: new Date().toISOString(),
-      isOwner: true,
-      sessionToken: nanoid(32)
-    };
-    state.teachers.push(teacher);
-    db.save(state);
-    return res.status(201).json({ 
-      ok: true, 
-      teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
-      teacherKey: teacher.sessionToken 
-    });
-  }
-  
-  // Subsequent teachers need owner approval via ownerKey
-  if (ownerKey !== TEACHER_PASSCODE) {
-    return res.status(403).json({ error: 'Owner passcode required to add new teachers.' });
-  }
-  
-  if (state.teachers.some(t => t.username === username.toLowerCase())) {
-    return res.status(409).json({ error: 'Username already taken.' });
-  }
-  
-  const teacher = {
-    id: nanoid(12),
-    name: name.trim(),
-    username: username.trim().toLowerCase(),
-    passwordHash: hashPassword(password),
-    createdAt: new Date().toISOString(),
-    isOwner: false,
-    sessionToken: nanoid(32)
+// ---------------------------------------------------------------------
+// Auth
+//
+// Signup hashes the password with bcrypt and stores it in `profiles`.
+// Login checks it and issues a JWT (7-day expiry) carrying { sub:
+// profileId, role }. The browser stores that token in localStorage
+// and sends it as `Authorization: Bearer <token>` on every request
+// that needs it (see public/js/api.js). requireAuth() verifies the
+// token and loads the profile fresh from the DB on every request,
+// so a role change or a student's growing XP total is always current.
+// ---------------------------------------------------------------------
+
+const USERNAME_RE = /^[a-zA-Z0-9_\-. ]{3,40}$/;
+
+function signToken(profile) {
+  return jwt.sign({ sub: profile.id, role: profile.role }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function publicProfile(profile) {
+  const level = computeLevel(profile.xpTotal);
+  return { id: profile.id, username: profile.username, role: profile.role, xpTotal: profile.xpTotal, level };
+}
+
+function requireAuth(role) {
+  return async (req, res, next) => {
+    const header = req.get('authorization') || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Not logged in.' });
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: 'Your session expired. Please log in again.' });
+    }
+    const profile = await db.getProfileById(payload.sub);
+    if (!profile) return res.status(401).json({ error: 'Account not found.' });
+    if (role && profile.role !== role) return res.status(403).json({ error: `This action requires a ${role} account.` });
+    req.profile = profile;
+    next();
   };
-  state.teachers.push(teacher);
-  db.save(state);
-  return res.status(201).json({ 
-    ok: true, 
-    teacher: { id: teacher.id, name: teacher.name, username: teacher.username },
-    teacherKey: teacher.sessionToken 
-  });
+}
+
+app.post('/api/auth/signup', async (req, res) => {
+  const { username, password, role } = req.body || {};
+  if (!username || !USERNAME_RE.test(username)) {
+    return res.status(400).json({ error: 'Username must be 3-40 characters (letters, numbers, spaces, - _ . only).' });
+  }
+  if (!password || password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  }
+  if (role !== 'teacher' && role !== 'student') {
+    return res.status(400).json({ error: 'Role must be "teacher" or "student".' });
+  }
+
+  const existing = await db.findProfileByUsername(username);
+  if (existing) return res.status(409).json({ error: 'That username is already taken.' });
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const profile = await db.createProfile({ id: crypto.randomUUID(), username: username.trim(), passwordHash, role });
+  res.status(201).json({ token: signToken(profile), profile: publicProfile(profile) });
 });
 
-app.get('/api/teachers', requireTeacher, (req, res) => {
-  const state = db.load();
-  const teachers = state.teachers.map(t => ({
-    id: t.id,
-    name: t.name,
-    username: t.username,
-    isOwner: t.isOwner,
-    createdAt: t.createdAt
-  }));
-  res.json(teachers);
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'Enter a username and password.' });
+
+  const profile = await db.findProfileByUsername(username.trim());
+  if (!profile) return res.status(401).json({ error: 'Incorrect username or password.' });
+  const ok = await bcrypt.compare(password, profile.passwordHash);
+  if (!ok) return res.status(401).json({ error: 'Incorrect username or password.' });
+
+  res.json({ token: signToken(profile), profile: publicProfile(profile) });
 });
 
-app.delete('/api/teachers/:id', requireTeacher, (req, res) => {
-  const state = db.load();
-  const currentTeacher = state.teachers.find(t => t.sessionToken === req.get('x-teacher-key'));
-  if (!currentTeacher || !currentTeacher.isOwner) {
-    return res.status(403).json({ error: 'Only the owner can delete teachers.' });
-  }
-  if (req.params.id === currentTeacher.id) {
-    return res.status(400).json({ error: 'Cannot delete yourself.' });
-  }
-  state.teachers = state.teachers.filter(t => t.id !== req.params.id);
-  db.save(state);
-  res.json({ ok: true });
+app.get('/api/auth/me', requireAuth(), async (req, res) => {
+  res.json({ profile: publicProfile(req.profile) });
 });
 
 // ---------------------------------------------------------------------
@@ -215,15 +176,17 @@ function validateQuiz(payload) {
   return errors;
 }
 
-function normalizeQuiz(payload) {
+function normalizeQuiz(payload, teacherId) {
   return {
     id: nanoid(10),
+    teacherId,
     code: crypto.randomInt(100000, 999999).toString(), // 6-digit join code, easy for students to type
     title: payload.title.trim(),
     description: (payload.description || '').trim(),
-    createdAt: new Date().toISOString(),
     hidePinyin: false,
-    timeLimitSeconds: 0, // 0 = no per-question timer / speed bonus
+    timeLimitSeconds: 0, // 0 = no timer. When set, this is a single
+    // countdown for the WHOLE quiz (not per question) - see
+    // toStudentView and recomputeScore below.
     allowRetakes: true,
     questions: payload.questions.map((q) => ({
       id: nanoid(8),
@@ -233,7 +196,6 @@ function normalizeQuiz(payload) {
       options: q.options,
       optionMeanings: Array.isArray(q.optionMeanings) ? q.optionMeanings : undefined,
       answer: q.answer,
-      explanation: q.explanation || undefined,
       points: typeof q.points === 'number' ? q.points : 1,
     })),
   };
@@ -250,19 +212,6 @@ function stripPinyin(text) {
   if (typeof text !== 'string') return text;
   return text.replace(PINYIN_PAREN, '').trim();
 }
-
-// Strip answers/explanations before sending a quiz to a student. The
-// English meaning fields are included - they're not a secret, just
-// hidden behind a toggle in the UI - so the student's own browser can
-// show/hide them instantly with no extra request. Pinyin is removed
-// here on the server, before the quiz ever reaches the student's
-// browser, when the teacher has hidePinyin turned on for this quiz.
-//
-// This also randomizes: question order is shuffled, and each question
-// shows a random 4 of its full option pool (the correct answer plus 3
-// random distractors), also shuffled. Called fresh on every join, so
-// a student retaking a quiz - or two students taking it back to back -
-// don't see the same order or the same wrong answers next to it.
 
 function shuffle(arr) {
   const a = arr.slice();
@@ -284,6 +233,9 @@ function pickDisplayOptions(q, maxCount = 4) {
   };
 }
 
+// Strip answers before sending a quiz to a student, randomize question
+// and option order (see pickDisplayOptions), and strip pinyin here on
+// the server when the teacher has hidePinyin turned on.
 function toStudentView(quiz) {
   const hide = !!quiz.hidePinyin;
   return {
@@ -310,253 +262,220 @@ function toStudentView(quiz) {
 // Teacher routes
 // ---------------------------------------------------------------------
 
-app.get('/api/quizzes', requireTeacher, (req, res) => {
-  const state = db.load();
-  const summaries = state.quizzes
-    .slice()
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .map((quiz) => ({
-      id: quiz.id,
-      code: quiz.code,
-      title: quiz.title,
-      description: quiz.description,
-      createdAt: quiz.createdAt,
-      questionCount: quiz.questions.length,
-      attemptCount: state.attempts.filter((a) => a.quizId === quiz.id).length,
-    }));
-  res.json(summaries);
+app.get('/api/quizzes', requireAuth('teacher'), async (req, res) => {
+  res.json(await db.listQuizzesByTeacher(req.profile.id));
 });
 
-app.post('/api/quizzes', requireTeacher, (req, res) => {
+app.post('/api/quizzes', requireAuth('teacher'), async (req, res) => {
   const errors = validateQuiz(req.body);
   if (errors.length) {
     return res.status(400).json({ error: 'That JSON does not match the expected quiz format.', details: errors });
   }
-  const quiz = normalizeQuiz(req.body);
-  db.update((state) => state.quizzes.push(quiz));
+  const quiz = await db.createQuiz(normalizeQuiz(req.body, req.profile.id));
   res.status(201).json(quiz);
 });
 
-app.get('/api/quizzes/:id', requireTeacher, (req, res) => {
-  const state = db.load();
-  const quiz = state.quizzes.find((q) => q.id === req.params.id);
-  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
-  res.json(quiz);
+async function loadOwnedQuiz(req, res) {
+  const quiz = await db.getQuizById(req.params.id);
+  if (!quiz || quiz.teacherId !== req.profile.id) {
+    res.status(404).json({ error: 'Quiz not found.' });
+    return null;
+  }
+  return quiz;
+}
+
+app.get('/api/quizzes/:id', requireAuth('teacher'), async (req, res) => {
+  const quiz = await loadOwnedQuiz(req, res);
+  if (quiz) res.json(quiz);
 });
 
-app.delete('/api/quizzes/:id', requireTeacher, (req, res) => {
-  db.update((state) => {
-    state.quizzes = state.quizzes.filter((q) => q.id !== req.params.id);
-    state.attempts = state.attempts.filter((a) => a.quizId !== req.params.id);
-  });
+app.delete('/api/quizzes/:id', requireAuth('teacher'), async (req, res) => {
+  const quiz = await loadOwnedQuiz(req, res);
+  if (!quiz) return;
+  await db.deleteQuiz(quiz.id);
   res.json({ ok: true });
 });
 
 // Per-quiz settings a teacher can flip any time, including for a quiz
 // students are already using - the next student to join just gets the
 // updated view.
-app.patch('/api/quizzes/:id/settings', requireTeacher, (req, res) => {
+app.patch('/api/quizzes/:id/settings', requireAuth('teacher'), async (req, res) => {
+  const quiz = await loadOwnedQuiz(req, res);
+  if (!quiz) return;
   const { hidePinyin, timeLimitSeconds, allowRetakes } = req.body || {};
-  const result = db.update((state) => {
-    const quiz = state.quizzes.find((q) => q.id === req.params.id);
-    if (!quiz) return { notFound: true };
-    if (typeof hidePinyin === 'boolean') quiz.hidePinyin = hidePinyin;
-    if (typeof timeLimitSeconds === 'number' && timeLimitSeconds >= 0) {
-      quiz.timeLimitSeconds = Math.round(timeLimitSeconds);
-    }
-    if (typeof allowRetakes === 'boolean') quiz.allowRetakes = allowRetakes;
-    return { quiz };
-  });
-  if (result.notFound) return res.status(404).json({ error: 'Quiz not found.' });
-  res.json(result.quiz);
+  res.json(await db.updateQuizSettings(quiz.id, { hidePinyin, timeLimitSeconds, allowRetakes }));
 });
 
-app.get('/api/quizzes/:id/results', requireTeacher, (req, res) => {
-  const state = db.load();
-  const quiz = state.quizzes.find((q) => q.id === req.params.id);
-  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
-  const attempts = state.attempts
-    .filter((a) => a.quizId === req.params.id)
-    .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
-  res.json({ quiz, attempts });
-});
-
-// ---------------------------------------------------------------------
-// Student routes - now with simple PIN-based accounts for retake history
-// ---------------------------------------------------------------------
-
-app.get('/api/students', requireTeacher, (req, res) => {
-  const state = db.load();
-  const students = state.students.map(s => ({
-    id: s.id,
-    name: s.name,
-    createdAt: s.createdAt,
-    attemptCount: state.attempts.filter(a => a.studentId === s.id).length
-  }));
-  res.json(students);
-});
-
-app.post('/api/students/register', (req, res) => {
-  const { name, pin } = req.body || {};
-  if (!name || !pin) {
-    return res.status(400).json({ error: 'Name and PIN are required.' });
-  }
-  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
-    return res.status(400).json({ error: 'PIN must be exactly 4 digits.' });
-  }
-  if (name.length > 60) {
-    return res.status(400).json({ error: 'Name is too long.' });
-  }
-  
-  const state = db.load();
-  const existing = state.students.find(s => 
-    s.name.trim().toLowerCase() === name.trim().toLowerCase()
+app.get('/api/quizzes/:id/results', requireAuth('teacher'), async (req, res) => {
+  const quiz = await loadOwnedQuiz(req, res);
+  if (!quiz) return;
+  const attempts = await db.listAttemptsByQuiz(quiz.id);
+  // Attach each submitted student's current level, so the teacher
+  // dashboard can show a badge next to their name.
+  const withLevels = await Promise.all(
+    attempts.map(async (a) => {
+      if (!a.studentId) return a;
+      const student = await db.getProfileById(a.studentId);
+      return student ? { ...a, studentLevel: computeLevel(student.xpTotal) } : a;
+    })
   );
-  
-  if (existing) {
-    // Return existing student if PIN matches
-    if (existing.pin === pin) {
-      return res.json({ student: { id: existing.id, name: existing.name }, existing: true });
-    }
-    return res.status(409).json({ error: 'A student with this name already exists. Please choose a different name or check your PIN.' });
-  }
-  
-  const student = {
-    id: nanoid(12),
-    name: name.trim(),
-    pin: pin,
-    createdAt: new Date().toISOString()
-  };
-  state.students.push(student);
-  db.save(state);
-  res.status(201).json({ student: { id: student.id, name: student.name }, existing: false });
+  res.json({ quiz, attempts: withLevels });
 });
 
-app.get('/api/join/:code', (req, res) => {
-  const state = db.load();
-  const quiz = state.quizzes.find((q) => q.code === req.params.code);
+// ---------------------------------------------------------------------
+// Student routes - joining and taking a quiz requires a student
+// account (see requireAuth('student') below), but the join CODE
+// itself stays a simple 6-digit code, not a per-quiz invite link.
+// ---------------------------------------------------------------------
+
+app.get('/api/join/:code', async (req, res) => {
+  const quiz = await db.findQuizByCode(req.params.code);
   if (!quiz) return res.status(404).json({ error: 'No quiz found for that code. Double-check it with your teacher.' });
   res.json({ title: quiz.title, description: quiz.description, questionCount: quiz.questions.length });
 });
 
-app.post('/api/join/:code', (req, res) => {
-  const { studentName, studentPin, studentId } = req.body || {};
-  
-  let student = null;
-  const state = db.load();
-  
-  // If studentId provided, they're logging in to existing account
-  if (studentId) {
-    student = state.students.find(s => s.id === studentId);
-    if (!student) {
-      return res.status(404).json({ error: 'Student account not found.' });
-    }
-    if (student.pin !== studentPin) {
-      return res.status(401).json({ error: 'Incorrect PIN.' });
-    }
-  } else {
-    // New student session - just name entry for quick joins
-    const name = (studentName || '').trim();
-    if (!name) return res.status(400).json({ error: 'Enter your name to start.' });
-    if (name.length > 60) return res.status(400).json({ error: 'That name is too long.' });
-    
-    // Find or create student record
-    student = state.students.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
-    if (!student) {
-      // Create temporary student without PIN for one-time joins
-      student = {
-        id: nanoid(12),
-        name: name,
-        pin: null,
-        createdAt: new Date().toISOString()
-      };
-      state.students.push(student);
-      db.save(state);
-    }
-  }
-  
-  const quiz = state.quizzes.find((q) => q.code === req.params.code);
+app.post('/api/join/:code', requireAuth('student'), async (req, res) => {
+  const quiz = await db.findQuizByCode(req.params.code);
   if (!quiz) return res.status(404).json({ error: 'No quiz found for that code.' });
 
   if (quiz.allowRetakes === false) {
-    const alreadyDone = state.attempts.some(
-      (a) => a.quizId === quiz.id && a.submittedAt && a.studentId === student.id
-    );
+    const alreadyDone = await db.hasCompletedAttempt(quiz.id, { studentId: req.profile.id });
     if (alreadyDone) {
       return res.status(409).json({ error: 'You already completed this quiz. Ask your teacher if you need another attempt.' });
     }
   }
 
-  const attempt = {
+  const attempt = await db.createAttempt({
     id: nanoid(12),
     quizId: quiz.id,
-    studentId: student.id,
-    studentName: student.name,
-    answers: {},
-    score: null,
-    total: quiz.questions.reduce((sum, q) => sum + q.points, 0),
-    submittedAt: null,
-    startedAt: new Date().toISOString(),
-  };
-  db.update((s) => s.attempts.push(attempt));
-
-  res.status(201).json({ 
-    attemptId: attempt.id, 
-    quiz: toStudentView(quiz),
-    student: { id: student.id, name: student.name, hasPin: !!student.pin }
+    studentId: req.profile.id,
+    studentName: req.profile.username,
   });
+
+  res.status(201).json({ attemptId: attempt.id, quiz: toStudentView(quiz) });
 });
 
-function recomputeScore(attempt, quiz) {
-  let score = 0;
+// Two numbers, two jobs:
+//  - accuracyScore (0-100): correct/total, stable and comparable, for
+//    the teacher's gradebook. Never affected by speed or streaks.
+//  - xpScore: uncapped, playful - base points, +50% speed bonus at
+//    most (tapering to +0% as the WHOLE-QUIZ timer runs out), plus a
+//    streak bonus that grows with consecutive correct answers. This
+//    is also what gets added to the student's cumulative xp_total /
+//    level (see /submit below) - so a fast, streaky quiz genuinely
+//    moves the needle on their level, on top of counting for this
+//    one quiz's fun number.
+function recomputeScore(answers, answerOrderIn, quiz) {
   const limitMs = (quiz.timeLimitSeconds || 0) * 1000;
-  quiz.questions.forEach((q) => {
-    const given = attempt.answers[q.id];
-    if (!given) return;
+  const totalPoints = quiz.questions.reduce((sum, q) => sum + q.points, 0);
+
+  let correctCount = 0;
+  let xp = 0;
+  let streak = 0;
+  let longestStreak = 0;
+
+  const order = answerOrderIn && answerOrderIn.length ? answerOrderIn : quiz.questions.map((q) => q.id);
+
+  order.forEach((questionId) => {
+    const q = quiz.questions.find((qq) => qq.id === questionId);
+    const given = answers[questionId];
+    if (!q || !given) { streak = 0; return; }
+
     const value = typeof given === 'object' ? given.value : given;
     const usedMeaning = typeof given === 'object' && given.usedMeaning === true;
-    const timeTakenMs = typeof given === 'object' && typeof given.timeTakenMs === 'number' ? given.timeTakenMs : null;
-    if (value !== q.answer) return;
+    const answeredAtMs = typeof given === 'object' && typeof given.answeredAtMs === 'number' ? given.answeredAtMs : null;
+
+    if (value !== q.answer) { streak = 0; return; }
+
+    correctCount += 1;
+    streak += 1;
+    longestStreak = Math.max(longestStreak, streak);
 
     const base = usedMeaning ? q.points * 0.5 : q.points;
-    if (limitMs > 0 && timeTakenMs !== null) {
-      // Up to +50% bonus for an instant correct answer, tapering to
-      // +0% right at the time limit. Bonus isn't part of "total", so
-      // a fast student's score can (deliberately) beat the max.
-      const speedFraction = Math.max(0, Math.min(1, 1 - timeTakenMs / limitMs));
-      score += base + base * 0.5 * speedFraction;
-    } else {
-      score += base;
+    let bonusMultiplier = 0;
+
+    if (limitMs > 0 && answeredAtMs !== null) {
+      const remainingMs = Math.max(0, limitMs - answeredAtMs);
+      const speedFraction = Math.min(1, remainingMs / limitMs);
+      bonusMultiplier += 0.5 * speedFraction; // up to +50% for answering early
     }
+    // Streak bonus: +10% per consecutive correct answer beyond the
+    // first two, capped at +50% (a streak of 5 or more).
+    bonusMultiplier += Math.min(0.5, Math.max(0, streak - 2) * 0.1);
+
+    xp += base + base * bonusMultiplier;
   });
-  // Round to 2 decimals so halved points and speed bonuses don't
-  // accumulate floating-point noise like 7.499999999999999.
-  attempt.score = Math.round(score * 100) / 100;
+
+  return {
+    accuracyScore: totalPoints > 0 ? Math.round((correctCount / quiz.questions.length) * 100) : 0,
+    xpScore: Math.round(xp * 100) / 100,
+    longestStreak,
+  };
 }
 
-app.post('/api/attempts/:attemptId/submit', (req, res) => {
+// Immediate correctness check, called right after the student picks an
+// option - this is what powers the on-screen streak animation while
+// the quiz is still in progress. It records the answer (so a student
+// who never hits "submit" isn't lost) but does NOT finalize the
+// attempt or touch XP - /submit below is still the source of truth.
+app.post('/api/attempts/:attemptId/answer', requireAuth('student'), async (req, res) => {
+  const { questionId, value, usedMeaning, answeredAtMs } = req.body || {};
+  if (!questionId) return res.status(400).json({ error: 'Missing questionId.' });
+
+  const attempt = await db.getAttemptById(req.params.attemptId);
+  if (!attempt || attempt.studentId !== req.profile.id) return res.status(404).json({ error: 'Attempt not found.' });
+  const quiz = await db.getQuizById(attempt.quizId);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  const q = quiz.questions.find((qq) => qq.id === questionId);
+  if (!q) return res.status(404).json({ error: 'Question not found.' });
+
+  const given = { value, usedMeaning: !!usedMeaning, answeredAtMs: typeof answeredAtMs === 'number' ? answeredAtMs : null };
+  const outcome = await db.recordAnswer(attempt.id, questionId, given);
+  if (outcome === 'already_submitted') return res.status(409).json({ error: 'This attempt was already submitted.' });
+
+  res.json({ correct: value === q.answer });
+});
+
+app.post('/api/attempts/:attemptId/submit', requireAuth('student'), async (req, res) => {
   const { answers } = req.body || {};
   if (!answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing answers.' });
   }
 
-  const result = db.update((state) => {
-    const attempt = state.attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return { notFound: true };
-    if (attempt.submittedAt) return { alreadySubmitted: true, attempt };
-    const quiz = state.quizzes.find((q) => q.id === attempt.quizId);
-    if (!quiz) return { notFound: true };
+  const attempt = await db.getAttemptById(req.params.attemptId);
+  if (!attempt || attempt.studentId !== req.profile.id) return res.status(404).json({ error: 'Attempt not found.' });
+  if (attempt.submittedAt) return res.status(409).json({ error: 'This attempt was already submitted.' });
+  const quiz = await db.getQuizById(attempt.quizId);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
 
-    attempt.answers = answers;
-    attempt.submittedAt = new Date().toISOString();
-    recomputeScore(attempt, quiz);
-    return { attempt, quiz };
+  // Merge rather than overwrite - most answers already arrived via
+  // /answer as the student worked through the quiz; this just fills
+  // in anything that request missed (e.g. a flaky connection).
+  const mergedAnswers = { ...attempt.answers, ...answers };
+  const mergedOrder = attempt.answerOrder.slice();
+  Object.keys(answers).forEach((questionId) => {
+    if (!mergedOrder.includes(questionId)) mergedOrder.push(questionId);
   });
 
-  if (result.notFound) return res.status(404).json({ error: 'Attempt not found.' });
+  const scored = recomputeScore(mergedAnswers, mergedOrder, quiz);
+  await db.finalizeAttempt(attempt.id, mergedAnswers, mergedOrder, scored);
+
+  // The XP this attempt earned is added to the student's permanent
+  // total, which is what the level badge is computed from.
+  const newXpTotal = await db.addXp(req.profile.id, scored.xpScore);
+  const level = computeLevel(newXpTotal);
+  const leveledUp = level.index > computeLevel(newXpTotal - scored.xpScore).index;
 
   const meaningUsedCount = Object.values(answers).filter((a) => a && typeof a === 'object' && a.usedMeaning).length;
-  res.json({ score: result.attempt.score, total: result.attempt.total, meaningUsedCount });
+  res.json({
+    accuracyScore: scored.accuracyScore,
+    xpScore: scored.xpScore,
+    longestStreak: scored.longestStreak,
+    meaningUsedCount,
+    xpTotal: newXpTotal,
+    level,
+    leveledUp,
+  });
 });
 
 // Fallback to the SPA for any non-API route so deep links (e.g. a
@@ -566,9 +485,14 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Catches anything the wrapper above passed to next(err) - a Supabase
+// error, a bug, whatever. Must be registered last and take 4
+// arguments (that's how Express recognizes an error handler).
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Something went wrong on the server. Please try again.' });
+});
+
 app.listen(PORT, () => {
   console.log(`Mandarin quiz app running at http://localhost:${PORT}`);
-  if (TEACHER_PASSCODE === 'change-me-please') {
-    console.log('Reminder: set TEACHER_PASSCODE in your .env file before sharing this with students.');
-  }
 });

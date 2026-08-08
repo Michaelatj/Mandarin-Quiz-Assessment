@@ -35,6 +35,8 @@ const ICONS = {
   logout: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h4M16 17l5-5-5-5M21 12H9"/></svg>`,
 
   palette: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.9 1.2-1.8-.3-.5-.1-1.2.5-1.4.9-.3 1.6-1.1 1.6-2.1 0-1.2-1-2.2-2.2-2.2H12a2 2 0 0 1 0-4h3a4 4 0 0 0 4-4c0-1.4-3.1-2.5-7-2.5Z"/><circle cx="7.5" cy="10.5" r="1"/><circle cx="8.5" cy="15" r="1"/></svg>`,
+
+  star: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><path d="M12 3.5 14.6 9l6 .9-4.3 4.2 1 6-5.3-2.8-5.3 2.8 1-6L3.4 9.9l6-.9L12 3.5Z"/></svg>`,
 };
 
 function icon(name, size) {
