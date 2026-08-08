@@ -347,6 +347,32 @@ web host instead. Any Node.js host works; two straightforward options:
 Same idea: connect the repo, set the same three environment
 variables, deploy.
 
+**Vercel**
+Vercel runs Node apps as serverless functions rather than a
+traditional always-on server, so this needs one small difference from
+the two options above: `vercel.json` in this repo already tells
+Vercel to treat `server.js` as one function handling every route, and
+`server.js` itself only calls `app.listen()` when run directly (your
+own machine, Render, Railway) - Vercel instead imports the exported
+Express app and invokes it per request. Nothing else about the app
+changes.
+
+1. Push this folder to a GitHub repository, then import it in Vercel
+   ("Add New -> Project").
+2. In the project's **Settings -> Environment Variables**, add
+   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `JWT_SECRET`.
+3. **Important**: Vercel scopes environment variables per environment
+   (Production / Preview / Development) separately. If you're testing
+   on a branch deploy (a URL with `-git-<branch>-` in it, like a
+   preview build), make sure each variable is enabled for **Preview**
+   too, not just Production - the checkbox for this is right where
+   you add each variable. A variable set for Production only won't
+   exist in a preview deployment, which will fail the same way as
+   having no `.env` at all.
+4. Redeploy after adding/changing environment variables - like `.env`
+   locally, a running deployment doesn't pick up new variables until
+   it restarts.
+
 ### About persistence
 
 Because everything lives in Supabase's Postgres rather than a file on

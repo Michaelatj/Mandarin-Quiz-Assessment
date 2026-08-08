@@ -493,6 +493,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong on the server. Please try again.' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Mandarin quiz app running at http://localhost:${PORT}`);
-});
+// Vercel runs this file as a serverless function - it imports
+// `module.exports` and calls it as a (req, res) handler per request,
+// it never runs this file with `node server.js` directly. Everywhere
+// else (your own machine, Render, Railway) runs it exactly that way,
+// so app.listen() only happens in that case. require.main === module
+// is true precisely when this file was the one started directly.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Mandarin quiz app running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
