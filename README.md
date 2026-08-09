@@ -3,9 +3,9 @@
 A small, self-hosted quiz tool. You write no quiz content yourself - you
 hand your lesson material to any free AI chatbot with a ready-made prompt,
 paste the JSON it gives back into this app, and share a 6-digit code with
-your students. They log into their own account and take the quiz -
-correct streaks earn an on-screen animation, and XP carries over between
-quizzes into a persistent level. You see every result on one page.
+your students. They type their name (no account) and take the quiz -
+correct streaks earn an on-screen animation, and finishing earns a fun
+title based on how that quiz went. You see every result on one page.
 
 There is no paid AI API anywhere in this app. The chatbot step happens on
 whatever free chatbot website you already use, in your own browser tab.
@@ -44,12 +44,12 @@ npm install
 This downloads the small set of libraries the server uses (Express,
 etc.) into a `node_modules` folder. It only needs to be done once.
 
-## Step 3 - Set up your database (Supabase) and accounts
+## Step 3 - Set up your database (Supabase) and your passcode
 
-This app stores everything - quizzes, questions, results, student
-levels - in a free Supabase Postgres database, and uses real
-username/password accounts for both teachers and students (not a
-shared passcode). Setup:
+This app stores everything - quizzes, questions, and results - in a
+free Supabase Postgres database. There are no user accounts: one
+shared passcode unlocks the teacher dashboard (you choose it), and
+students just type their name, same as walking into a classroom.
 
 1. Go to https://supabase.com, sign up free, and create a new project.
 2. Once it's ready, open the **SQL Editor** in the left sidebar,
@@ -66,20 +66,12 @@ shared passcode). Setup:
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
-JWT_SECRET=some-long-random-string
+TEACHER_PASSCODE=your-own-passcode-here
 PORT=3000
 ```
 
-For `JWT_SECRET`, anything long and random works - it's what signs
-login sessions. One easy way to generate one:
-
-```
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-Once `.env` is filled in, both teachers and students create their own
-account from the app itself (username + password, at least 8
-characters) - there's nothing else to configure.
+`TEACHER_PASSCODE` can be anything - it's just a shared secret between
+you and your browser, since this is a personal tool for one teacher.
 
 ## Step 4 - Run it
 
@@ -105,8 +97,7 @@ on the internet so students can reach it from their own devices.
 
 ## Writing a quiz (no typing questions by hand)
 
-1. In the app, choose **I'm the teacher**, then log in (or create an
-   account the first time - just a username and password).
+1. In the app, choose **I'm the teacher**, enter your passcode.
 2. Click **New quiz**. The page shows a ready-made prompt.
 3. Pick the **HSK level** your students are at - it's inserted into
    the prompt automatically, so the chatbot keeps vocabulary near
@@ -222,30 +213,37 @@ The "show meaning" half-credit penalty still applies to both numbers
 if a student used it. Like the other settings, the time limit can be
 changed at any time and only affects students who join afterward.
 
-### Levels - XP that persists across every quiz
+### Titles - a fun label for how THIS quiz went
 
-A student's XP score from each quiz they submit is added to a running
-total on their account - it doesn't reset between quizzes. That total
-determines their **level**, shown as a small badge next to their name
-in the app and on your results page, with a progress bar toward the
-next tier shown right after they submit a quiz.
+There are no accounts in this app, so nothing carries over between
+quizzes - instead, right when a student submits, they get a fun
+**title** computed fresh from that one attempt's accuracy and streak.
+It's shown big on their results screen with an entrance animation (and
+a bigger, glowing version for a genuinely flawless run), and as a
+small badge next to their name on your results page.
 
-The level names themselves live in `levels.js` at the root of this
+The titles themselves live in `titles.js` at the root of this
 project, deliberately kept in one small, easy-to-find file:
 
 ```js
-const LEVELS = [
-  { name: '童生 Beginner', minXp: 0 },
-  { name: '秀才 Scholar', minXp: 100 },
-  { name: '举人 Graduate', minXp: 300 },
-  { name: '进士 Master', minXp: 700 },
-  { name: '状元 Grandmaster', minXp: 1500 },
+const TITLES = [
+  { name: '童生 Beginner', minAccuracy: 0 },
+  { name: '秀才 Apprentice', minAccuracy: 50 },
+  { name: '举人 Rising Talent', minAccuracy: 75 },
+  { name: '探花 Star Student', minAccuracy: 90 },
+  { name: '状元 Grand Champion', minAccuracy: 100, requiresFlawlessStreak: true },
 ];
 ```
 
-Rename the tiers, add more, or change the thresholds freely - just
-keep them in ascending `minXp` order. Restart `npm start` after
-editing for the change to take effect.
+Rename these, add more, or change the thresholds freely - just keep
+them in ascending `minAccuracy` order. The top entry's
+`requiresFlawlessStreak: true` means a perfect accuracy score alone
+isn't enough for that title - the student's longest streak also has
+to equal the total number of questions, i.e. every single question
+answered correctly in one unbroken run, not just a high score reached
+after a couple of misses. Add `requiresFlawlessStreak: true` to any
+other tier too if you want the same rule to apply there. Restart
+`npm start` after editing for the change to take effect.
 
 ### Retakes and shuffling
 
@@ -317,12 +315,11 @@ them to check with you.
 After you create a quiz, its page shows a 6-digit **join code**. Give
 that code to your students (write it on the board, put it in a group
 chat, whatever you already use). They go to the site, choose
-**I'm a student**, log into their account (or create one the first
-time), enter the code, and take the quiz.
+**I'm a student**, enter the code and their name, and take the quiz.
 
 Come back to that quiz's page any time to see everyone's score - each
-student's current level shows next to their name. Click **Review** on
-any response to see question-by-question right/wrong.
+student's title for that quiz shows next to their name. Click
+**Review** on any response to see question-by-question right/wrong.
 
 ---
 
@@ -339,7 +336,7 @@ web host instead. Any Node.js host works; two straightforward options:
 3. Build command: `npm install`. Start command: `npm start`.
 4. In Render's dashboard, add the same three environment variables
    from your `.env` file - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `JWT_SECRET` (don't upload your `.env` file itself; Render's
+   `TEACHER_PASSCODE` (don't upload your `.env` file itself; Render's
    dashboard is the safe place to set secrets).
 5. Render gives you a public URL - that's what you share.
 
@@ -360,7 +357,7 @@ changes.
 1. Push this folder to a GitHub repository, then import it in Vercel
    ("Add New -> Project").
 2. In the project's **Settings -> Environment Variables**, add
-   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `JWT_SECRET`.
+   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `TEACHER_PASSCODE`.
 3. **Important**: Vercel scopes environment variables per environment
    (Production / Preview / Development) separately. If you're testing
    on a branch deploy (a URL with `-git-<branch>-` in it, like a
@@ -378,12 +375,12 @@ changes.
 Because everything lives in Supabase's Postgres rather than a file on
 the host's own disk, this app has none of the "free host wipes the
 filesystem on restart" problem a simpler setup would have - your
-quizzes, accounts, and student XP all survive redeploys, restarts, and
-switching hosts entirely, since none of it lives on the web host at
-all. The only thing to keep safe is your `.env` file (specifically the
-Supabase service-role key and JWT secret) - anyone with those could
-read or write your database directly, so treat it like a password and
-never commit it to a public repo.
+quizzes and results all survive redeploys, restarts, and switching
+hosts entirely, since none of it lives on the web host at all. The
+only thing to keep safe is your `.env` file (specifically the
+Supabase service-role key and your teacher passcode) - anyone with
+the service-role key could read or write your database directly, so
+treat it like a password and never commit it to a public repo.
 
 ---
 
@@ -415,8 +412,8 @@ Your choice is remembered in that browser, no restart needed.
 
 ## Troubleshooting
 
-**"Failed to load resource: 405" on `/api/auth/login`, or the login
-page doesn't work at all.**
+**"Failed to load resource: 405" on `/api/login`, or the login page
+doesn't work at all.**
 This almost always means the app is being opened the wrong way - for
 example through a VS Code "Live Server" extension (usually on port
 `5500`), or by double-clicking `index.html` directly. Those only serve
@@ -440,7 +437,16 @@ the same folder as `server.js`, and that the values are copied from
 your Supabase project's **Project Settings -> API** page (the
 **service_role** key specifically, not the "anon" key).
 
-**Signup or login returns "Something went wrong on the server."**
+**The server prints "Missing TEACHER_PASSCODE" and exits immediately.**
+Same idea - add a `TEACHER_PASSCODE` line to your `.env` file, any
+passcode you choose, then restart `npm start`.
+
+**The teacher passcode doesn't seem to work.**
+Make sure you restarted `npm start` (or redeployed, if hosted) after
+editing `.env` - it's only read on startup, not live.
+
+**Logging in, joining a quiz, or creating a quiz returns "Something
+went wrong on the server."**
 This means the request reached the server but the database call
 failed - almost always because `supabase/schema.sql` hasn't been run
 in your Supabase project's SQL editor yet, or the URL/key in `.env`
@@ -451,11 +457,10 @@ output for the actual error underneath that message.
 
 ## A note on data
 
-Everything - every account, quiz, and student response - lives in
-your own Supabase project's Postgres database, not on whatever server
+Everything - every quiz and every student response - lives in your
+own Supabase project's Postgres database, not on whatever server
 happens to be running the app. There's no analytics and nothing else
-phoning home. Passwords are hashed (bcrypt) before they're ever
-stored - the app itself never sees or logs a plain-text password after
-the request that created it. Back up your data by using Supabase's
+phoning home, and no student ever has to hand over a password since
+there are no accounts at all. Back up your data by using Supabase's
 own backup/export tools on your project, same as you would for any
 Postgres database.

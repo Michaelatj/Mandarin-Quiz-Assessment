@@ -2,27 +2,25 @@
 //
 // One Express app that serves both the API and the static frontend
 // (the public/ folder). Data lives in Supabase Postgres (see db.js
-// and supabase/schema.sql) instead of a local JSON file. Auth is our
-// own username/password system - bcrypt-hashed passwords in the
-// `profiles` table, our own signed JWT for sessions - not Supabase
-// Auth, which is built around email addresses rather than usernames.
+// and supabase/schema.sql) - purely as durable storage, not as an
+// auth system. There are no user accounts: the teacher is gated by
+// one shared passcode (TEACHER_PASSCODE in .env, same as the very
+// first version of this app), and students just type a name.
 
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const { nanoid } = require('nanoid');
 const db = require('./db');
-const { computeLevel } = require('./levels');
+const { computeTitle } = require('./titles');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const TEACHER_PASSCODE = process.env.TEACHER_PASSCODE;
 
-if (!JWT_SECRET) {
-  console.error('Missing JWT_SECRET in your .env file. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+if (!TEACHER_PASSCODE) {
+  console.error('Missing TEACHER_PASSCODE in your .env file. Set it to any passcode only you know.');
   process.exit(1);
 }
 
@@ -30,13 +28,13 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Express 4 does not catch rejected promises from an async route
-// handler (or async middleware, like requireAuth below) on its own -
-// an unhandled rejection there crashes the ENTIRE process, taking
-// down every other student and teacher connected at the time. This
-// wraps every handler passed to app.get/post/patch/delete so a
-// Supabase hiccup becomes a normal error response instead - see the
-// error-handling middleware at the bottom of this file, which turns
-// the passed-through error into JSON.
+// handler on its own - an unhandled rejection there crashes the
+// ENTIRE process, taking down every other student and teacher
+// connected at the time. This wraps every handler passed to
+// app.get/post/patch/delete so a Supabase hiccup becomes a normal
+// error response instead - see the error-handling middleware at the
+// bottom of this file, which turns the passed-through error into
+// JSON.
 ['get', 'post', 'patch', 'delete'].forEach((method) => {
   const original = app[method].bind(app);
   app[method] = (routePath, ...handlers) => original(
@@ -47,82 +45,16 @@ app.use(express.static(path.join(__dirname, 'public')));
   );
 });
 
-// ---------------------------------------------------------------------
-// Auth
-//
-// Signup hashes the password with bcrypt and stores it in `profiles`.
-// Login checks it and issues a JWT (7-day expiry) carrying { sub:
-// profileId, role }. The browser stores that token in localStorage
-// and sends it as `Authorization: Bearer <token>` on every request
-// that needs it (see public/js/api.js). requireAuth() verifies the
-// token and loads the profile fresh from the DB on every request,
-// so a role change or a student's growing XP total is always current.
-// ---------------------------------------------------------------------
-
-const USERNAME_RE = /^[a-zA-Z0-9_\-. ]{3,40}$/;
-
-function signToken(profile) {
-  return jwt.sign({ sub: profile.id, role: profile.role }, JWT_SECRET, { expiresIn: '7d' });
+function requireTeacher(req, res, next) {
+  const key = req.get('x-teacher-key');
+  if (key !== TEACHER_PASSCODE) return res.status(401).json({ error: 'Incorrect passcode.' });
+  next();
 }
 
-function publicProfile(profile) {
-  const level = computeLevel(profile.xpTotal);
-  return { id: profile.id, username: profile.username, role: profile.role, xpTotal: profile.xpTotal, level };
-}
-
-function requireAuth(role) {
-  return async (req, res, next) => {
-    const header = req.get('authorization') || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Not logged in.' });
-    let payload;
-    try {
-      payload = jwt.verify(token, JWT_SECRET);
-    } catch (err) {
-      return res.status(401).json({ error: 'Your session expired. Please log in again.' });
-    }
-    const profile = await db.getProfileById(payload.sub);
-    if (!profile) return res.status(401).json({ error: 'Account not found.' });
-    if (role && profile.role !== role) return res.status(403).json({ error: `This action requires a ${role} account.` });
-    req.profile = profile;
-    next();
-  };
-}
-
-app.post('/api/auth/signup', async (req, res) => {
-  const { username, password, role } = req.body || {};
-  if (!username || !USERNAME_RE.test(username)) {
-    return res.status(400).json({ error: 'Username must be 3-40 characters (letters, numbers, spaces, - _ . only).' });
-  }
-  if (!password || password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
-  if (role !== 'teacher' && role !== 'student') {
-    return res.status(400).json({ error: 'Role must be "teacher" or "student".' });
-  }
-
-  const existing = await db.findProfileByUsername(username);
-  if (existing) return res.status(409).json({ error: 'That username is already taken.' });
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  const profile = await db.createProfile({ id: crypto.randomUUID(), username: username.trim(), passwordHash, role });
-  res.status(201).json({ token: signToken(profile), profile: publicProfile(profile) });
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: 'Enter a username and password.' });
-
-  const profile = await db.findProfileByUsername(username.trim());
-  if (!profile) return res.status(401).json({ error: 'Incorrect username or password.' });
-  const ok = await bcrypt.compare(password, profile.passwordHash);
-  if (!ok) return res.status(401).json({ error: 'Incorrect username or password.' });
-
-  res.json({ token: signToken(profile), profile: publicProfile(profile) });
-});
-
-app.get('/api/auth/me', requireAuth(), async (req, res) => {
-  res.json({ profile: publicProfile(req.profile) });
+app.post('/api/login', (req, res) => {
+  const { passcode } = req.body || {};
+  if (passcode !== TEACHER_PASSCODE) return res.status(401).json({ error: 'Incorrect passcode.' });
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------
@@ -176,10 +108,9 @@ function validateQuiz(payload) {
   return errors;
 }
 
-function normalizeQuiz(payload, teacherId) {
+function normalizeQuiz(payload) {
   return {
     id: nanoid(10),
-    teacherId,
     code: crypto.randomInt(100000, 999999).toString(), // 6-digit join code, easy for students to type
     title: payload.title.trim(),
     description: (payload.description || '').trim(),
@@ -262,36 +193,28 @@ function toStudentView(quiz) {
 // Teacher routes
 // ---------------------------------------------------------------------
 
-app.get('/api/quizzes', requireAuth('teacher'), async (req, res) => {
-  res.json(await db.listQuizzesByTeacher(req.profile.id));
+app.get('/api/quizzes', requireTeacher, async (req, res) => {
+  res.json(await db.listQuizzes());
 });
 
-app.post('/api/quizzes', requireAuth('teacher'), async (req, res) => {
+app.post('/api/quizzes', requireTeacher, async (req, res) => {
   const errors = validateQuiz(req.body);
   if (errors.length) {
     return res.status(400).json({ error: 'That JSON does not match the expected quiz format.', details: errors });
   }
-  const quiz = await db.createQuiz(normalizeQuiz(req.body, req.profile.id));
+  const quiz = await db.createQuiz(normalizeQuiz(req.body));
   res.status(201).json(quiz);
 });
 
-async function loadOwnedQuiz(req, res) {
+app.get('/api/quizzes/:id', requireTeacher, async (req, res) => {
   const quiz = await db.getQuizById(req.params.id);
-  if (!quiz || quiz.teacherId !== req.profile.id) {
-    res.status(404).json({ error: 'Quiz not found.' });
-    return null;
-  }
-  return quiz;
-}
-
-app.get('/api/quizzes/:id', requireAuth('teacher'), async (req, res) => {
-  const quiz = await loadOwnedQuiz(req, res);
-  if (quiz) res.json(quiz);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
+  res.json(quiz);
 });
 
-app.delete('/api/quizzes/:id', requireAuth('teacher'), async (req, res) => {
-  const quiz = await loadOwnedQuiz(req, res);
-  if (!quiz) return;
+app.delete('/api/quizzes/:id', requireTeacher, async (req, res) => {
+  const quiz = await db.getQuizById(req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   await db.deleteQuiz(quiz.id);
   res.json({ ok: true });
 });
@@ -299,33 +222,22 @@ app.delete('/api/quizzes/:id', requireAuth('teacher'), async (req, res) => {
 // Per-quiz settings a teacher can flip any time, including for a quiz
 // students are already using - the next student to join just gets the
 // updated view.
-app.patch('/api/quizzes/:id/settings', requireAuth('teacher'), async (req, res) => {
-  const quiz = await loadOwnedQuiz(req, res);
-  if (!quiz) return;
+app.patch('/api/quizzes/:id/settings', requireTeacher, async (req, res) => {
+  const quiz = await db.getQuizById(req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   const { hidePinyin, timeLimitSeconds, allowRetakes } = req.body || {};
   res.json(await db.updateQuizSettings(quiz.id, { hidePinyin, timeLimitSeconds, allowRetakes }));
 });
 
-app.get('/api/quizzes/:id/results', requireAuth('teacher'), async (req, res) => {
-  const quiz = await loadOwnedQuiz(req, res);
-  if (!quiz) return;
+app.get('/api/quizzes/:id/results', requireTeacher, async (req, res) => {
+  const quiz = await db.getQuizById(req.params.id);
+  if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   const attempts = await db.listAttemptsByQuiz(quiz.id);
-  // Attach each submitted student's current level, so the teacher
-  // dashboard can show a badge next to their name.
-  const withLevels = await Promise.all(
-    attempts.map(async (a) => {
-      if (!a.studentId) return a;
-      const student = await db.getProfileById(a.studentId);
-      return student ? { ...a, studentLevel: computeLevel(student.xpTotal) } : a;
-    })
-  );
-  res.json({ quiz, attempts: withLevels });
+  res.json({ quiz, attempts });
 });
 
 // ---------------------------------------------------------------------
-// Student routes - joining and taking a quiz requires a student
-// account (see requireAuth('student') below), but the join CODE
-// itself stays a simple 6-digit code, not a per-quiz invite link.
+// Student routes - anonymous, just a name + the quiz's join code.
 // ---------------------------------------------------------------------
 
 app.get('/api/join/:code', async (req, res) => {
@@ -334,24 +246,22 @@ app.get('/api/join/:code', async (req, res) => {
   res.json({ title: quiz.title, description: quiz.description, questionCount: quiz.questions.length });
 });
 
-app.post('/api/join/:code', requireAuth('student'), async (req, res) => {
+app.post('/api/join/:code', async (req, res) => {
+  const { studentName } = req.body || {};
+  const name = (studentName || '').trim();
+  if (!name) return res.status(400).json({ error: 'Enter your name.' });
+
   const quiz = await db.findQuizByCode(req.params.code);
   if (!quiz) return res.status(404).json({ error: 'No quiz found for that code.' });
 
   if (quiz.allowRetakes === false) {
-    const alreadyDone = await db.hasCompletedAttempt(quiz.id, { studentId: req.profile.id });
+    const alreadyDone = await db.hasCompletedAttempt(quiz.id, name);
     if (alreadyDone) {
       return res.status(409).json({ error: 'You already completed this quiz. Ask your teacher if you need another attempt.' });
     }
   }
 
-  const attempt = await db.createAttempt({
-    id: nanoid(12),
-    quizId: quiz.id,
-    studentId: req.profile.id,
-    studentName: req.profile.username,
-  });
-
+  const attempt = await db.createAttempt({ id: nanoid(12), quizId: quiz.id, studentName: name });
   res.status(201).json({ attemptId: attempt.id, quiz: toStudentView(quiz) });
 });
 
@@ -360,11 +270,10 @@ app.post('/api/join/:code', requireAuth('student'), async (req, res) => {
 //    the teacher's gradebook. Never affected by speed or streaks.
 //  - xpScore: uncapped, playful - base points, +50% speed bonus at
 //    most (tapering to +0% as the WHOLE-QUIZ timer runs out), plus a
-//    streak bonus that grows with consecutive correct answers. This
-//    is also what gets added to the student's cumulative xp_total /
-//    level (see /submit below) - so a fast, streaky quiz genuinely
-//    moves the needle on their level, on top of counting for this
-//    one quiz's fun number.
+//    streak bonus that grows with consecutive correct answers. Fed
+//    into computeTitle() below for the fun label shown at the end -
+//    this app has no accounts, so nothing here persists between
+//    quizzes, it's all scoped to this one attempt.
 function recomputeScore(answers, answerOrderIn, quiz) {
   const limitMs = (quiz.timeLimitSeconds || 0) * 1000;
   const totalPoints = quiz.questions.reduce((sum, q) => sum + q.points, 0);
@@ -417,13 +326,13 @@ function recomputeScore(answers, answerOrderIn, quiz) {
 // option - this is what powers the on-screen streak animation while
 // the quiz is still in progress. It records the answer (so a student
 // who never hits "submit" isn't lost) but does NOT finalize the
-// attempt or touch XP - /submit below is still the source of truth.
-app.post('/api/attempts/:attemptId/answer', requireAuth('student'), async (req, res) => {
+// attempt - /submit below is still the source of truth.
+app.post('/api/attempts/:attemptId/answer', async (req, res) => {
   const { questionId, value, usedMeaning, answeredAtMs } = req.body || {};
   if (!questionId) return res.status(400).json({ error: 'Missing questionId.' });
 
   const attempt = await db.getAttemptById(req.params.attemptId);
-  if (!attempt || attempt.studentId !== req.profile.id) return res.status(404).json({ error: 'Attempt not found.' });
+  if (!attempt) return res.status(404).json({ error: 'Attempt not found.' });
   const quiz = await db.getQuizById(attempt.quizId);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   const q = quiz.questions.find((qq) => qq.id === questionId);
@@ -436,14 +345,14 @@ app.post('/api/attempts/:attemptId/answer', requireAuth('student'), async (req, 
   res.json({ correct: value === q.answer });
 });
 
-app.post('/api/attempts/:attemptId/submit', requireAuth('student'), async (req, res) => {
+app.post('/api/attempts/:attemptId/submit', async (req, res) => {
   const { answers } = req.body || {};
   if (!answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing answers.' });
   }
 
   const attempt = await db.getAttemptById(req.params.attemptId);
-  if (!attempt || attempt.studentId !== req.profile.id) return res.status(404).json({ error: 'Attempt not found.' });
+  if (!attempt) return res.status(404).json({ error: 'Attempt not found.' });
   if (attempt.submittedAt) return res.status(409).json({ error: 'This attempt was already submitted.' });
   const quiz = await db.getQuizById(attempt.quizId);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
@@ -458,23 +367,16 @@ app.post('/api/attempts/:attemptId/submit', requireAuth('student'), async (req, 
   });
 
   const scored = recomputeScore(mergedAnswers, mergedOrder, quiz);
-  await db.finalizeAttempt(attempt.id, mergedAnswers, mergedOrder, scored);
-
-  // The XP this attempt earned is added to the student's permanent
-  // total, which is what the level badge is computed from.
-  const newXpTotal = await db.addXp(req.profile.id, scored.xpScore);
-  const level = computeLevel(newXpTotal);
-  const leveledUp = level.index > computeLevel(newXpTotal - scored.xpScore).index;
+  const title = computeTitle(scored.accuracyScore, scored.longestStreak, quiz.questions.length);
+  await db.finalizeAttempt(attempt.id, mergedAnswers, mergedOrder, scored, title);
 
   const meaningUsedCount = Object.values(answers).filter((a) => a && typeof a === 'object' && a.usedMeaning).length;
   res.json({
     accuracyScore: scored.accuracyScore,
     xpScore: scored.xpScore,
     longestStreak: scored.longestStreak,
+    title,
     meaningUsedCount,
-    xpTotal: newXpTotal,
-    level,
-    leveledUp,
   });
 });
 
@@ -497,8 +399,7 @@ app.use((err, req, res, next) => {
 // `module.exports` and calls it as a (req, res) handler per request,
 // it never runs this file with `node server.js` directly. Everywhere
 // else (your own machine, Render, Railway) runs it exactly that way,
-// so app.listen() only happens in that case. require.main === module
-// is true precisely when this file was the one started directly.
+// so app.listen() only happens in that case.
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Mandarin quiz app running at http://localhost:${PORT}`);

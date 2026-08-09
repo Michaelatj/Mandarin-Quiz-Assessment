@@ -1,16 +1,16 @@
 // db.js
 //
-// The data access layer, now backed by Supabase's hosted Postgres
-// instead of a local JSON file (see supabase/schema.sql for the
-// tables). Every function here is async and talks to Postgres
-// through the Supabase JS client, using the SERVICE ROLE key -
-// meaning the Express server is the only thing that ever touches the
-// database directly. The browser never sees a Supabase key at all,
-// it only ever talks to our own /api/* routes.
+// The data access layer, backed by Supabase's hosted Postgres (see
+// supabase/schema.sql for the tables). There are no user accounts -
+// the teacher is gated by a shared passcode (see server.js) and
+// students just type a name, same as the original version of this
+// app - Supabase here is purely durable storage, not an auth system.
 //
-// Passwords are hashed with bcrypt before they're ever written here -
-// see the signup/login routes in server.js. This file just stores
-// and reads whatever hash it's given.
+// Every function here is async and talks to Postgres through the
+// Supabase JS client, using the SERVICE ROLE key - meaning the
+// Express server is the only thing that ever touches the database
+// directly. The browser never sees a Supabase key at all, it only
+// ever talks to our own /api/* routes.
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -37,26 +37,12 @@ function unwrap({ data, error }) {
 
 // ---------------------------------------------------------------------
 // Row <-> app-object mapping. Postgres columns are snake_case; the
-// rest of the app (and the JSON shapes the frontend already expects)
-// stay camelCase, same as they were with the old JSON file.
+// rest of the app stays camelCase.
 // ---------------------------------------------------------------------
-
-function profileFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    username: row.username,
-    passwordHash: row.password_hash,
-    role: row.role,
-    xpTotal: Number(row.xp_total),
-    createdAt: row.created_at,
-  };
-}
 
 function quizFromRow(row, questionRows = []) {
   return {
     id: row.id,
-    teacherId: row.teacher_id,
     code: row.code,
     title: row.title,
     description: row.description || '',
@@ -88,61 +74,16 @@ function attemptFromRow(row) {
   return {
     id: row.id,
     quizId: row.quiz_id,
-    studentId: row.student_id,
     studentName: row.student_name,
     answers: row.answers || {},
     answerOrder: row.answer_order || [],
     accuracyScore: row.accuracy_score === null ? null : Number(row.accuracy_score),
     xpScore: row.xp_score === null ? null : Number(row.xp_score),
     longestStreak: row.longest_streak,
+    title: row.title || null,
     startedAt: row.started_at,
     submittedAt: row.submitted_at,
   };
-}
-
-// ---------------------------------------------------------------------
-// Profiles (teacher + student accounts)
-// ---------------------------------------------------------------------
-
-async function createProfile({ id, username, passwordHash, role }) {
-  const row = unwrap(
-    await supabase
-      .from('profiles')
-      .insert({ id, username, password_hash: passwordHash, role })
-      .select()
-      .single()
-  );
-  return profileFromRow(row);
-}
-
-async function findProfileByUsername(username) {
-  const row = unwrap(
-    await supabase
-      .from('profiles')
-      .select('*')
-      .ilike('username', username) // case-insensitive - "Wei" and "wei" are the same account
-      .maybeSingle()
-  );
-  return profileFromRow(row);
-}
-
-async function getProfileById(id) {
-  const row = unwrap(await supabase.from('profiles').select('*').eq('id', id).maybeSingle());
-  return profileFromRow(row);
-}
-
-// Adds `amount` XP to a student's running total and returns the new
-// total. Read-modify-write rather than a raw SQL increment, which is
-// fine at this app's scale (one update per quiz submission).
-async function addXp(profileId, amount) {
-  const current = unwrap(
-    await supabase.from('profiles').select('xp_total').eq('id', profileId).single()
-  );
-  const newTotal = Number(current.xp_total) + amount;
-  unwrap(
-    await supabase.from('profiles').update({ xp_total: newTotal }).eq('id', profileId)
-  );
-  return newTotal;
 }
 
 // ---------------------------------------------------------------------
@@ -153,7 +94,6 @@ async function createQuiz(quiz) {
   unwrap(
     await supabase.from('quizzes').insert({
       id: quiz.id,
-      teacher_id: quiz.teacherId,
       code: quiz.code,
       title: quiz.title,
       description: quiz.description,
@@ -177,13 +117,9 @@ async function createQuiz(quiz) {
   return getQuizById(quiz.id);
 }
 
-async function listQuizzesByTeacher(teacherId) {
+async function listQuizzes() {
   const quizzes = unwrap(
-    await supabase
-      .from('quizzes')
-      .select('*')
-      .eq('teacher_id', teacherId)
-      .order('created_at', { ascending: false })
+    await supabase.from('quizzes').select('*').order('created_at', { ascending: false })
   );
   const results = [];
   for (const row of quizzes) {
@@ -242,7 +178,6 @@ async function createAttempt(attempt) {
     await supabase.from('attempts').insert({
       id: attempt.id,
       quiz_id: attempt.quizId,
-      student_id: attempt.studentId || null,
       student_name: attempt.studentName,
       answers: {},
       answer_order: [],
@@ -256,12 +191,16 @@ async function getAttemptById(id) {
   return row ? attemptFromRow(row) : null;
 }
 
-async function hasCompletedAttempt(quizId, studentNameOrId) {
-  let query = supabase.from('attempts').select('id').eq('quiz_id', quizId).not('submitted_at', 'is', null);
-  query = typeof studentNameOrId === 'object'
-    ? query.eq('student_id', studentNameOrId.studentId)
-    : query.ilike('student_name', studentNameOrId);
-  const rows = unwrap(await query.limit(1));
+async function hasCompletedAttempt(quizId, studentName) {
+  const rows = unwrap(
+    await supabase
+      .from('attempts')
+      .select('id')
+      .eq('quiz_id', quizId)
+      .not('submitted_at', 'is', null)
+      .ilike('student_name', studentName)
+      .limit(1)
+  );
   return rows.length > 0;
 }
 
@@ -287,9 +226,9 @@ async function recordAnswer(attemptId, questionId, given) {
 }
 
 // Merges any final answers in, marks the attempt submitted, and
-// writes the computed scores. `scored` is the result of
+// writes the computed scores + fun title. `scored` is the result of
 // recomputeScore() in server.js - this function just persists it.
-async function finalizeAttempt(attemptId, mergedAnswers, mergedOrder, scored) {
+async function finalizeAttempt(attemptId, mergedAnswers, mergedOrder, scored, title) {
   unwrap(
     await supabase
       .from('attempts')
@@ -300,6 +239,7 @@ async function finalizeAttempt(attemptId, mergedAnswers, mergedOrder, scored) {
         accuracy_score: scored.accuracyScore,
         xp_score: scored.xpScore,
         longest_streak: scored.longestStreak,
+        title,
       })
       .eq('id', attemptId)
   );
@@ -318,12 +258,8 @@ async function listAttemptsByQuiz(quizId) {
 }
 
 module.exports = {
-  createProfile,
-  findProfileByUsername,
-  getProfileById,
-  addXp,
   createQuiz,
-  listQuizzesByTeacher,
+  listQuizzes,
   getQuizById,
   findQuizByCode,
   deleteQuiz,

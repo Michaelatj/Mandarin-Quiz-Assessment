@@ -295,119 +295,63 @@ function renderLanding() {
 // ---------------------------------------------------------------------
 
 // ---------------------------------------------------------------------
-// Auth - shared between teacher and student accounts. One token/
-// profile pair lives in localStorage at a time; logging in as the
-// other role replaces it, same as any single-account browser session.
+// Auth - a single shared teacher passcode, same as the original
+// version of this app. Students never authenticate at all.
 // ---------------------------------------------------------------------
 
-function getAuth() {
-  const token = localStorage.getItem('authToken');
-  const profileRaw = localStorage.getItem('authProfile');
-  if (!token || !profileRaw) return null;
-  try {
-    return { token, profile: JSON.parse(profileRaw) };
-  } catch (_) {
-    return null;
-  }
+function isTeacherLoggedIn() {
+  return !!localStorage.getItem('teacherKey');
 }
 
-function setAuth(token, profile) {
-  localStorage.setItem('authToken', token);
-  localStorage.setItem('authProfile', JSON.stringify(profile));
-}
-
-function clearAuth() {
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('authProfile');
-}
-
-function logout() {
-  clearAuth();
+function teacherLogout() {
+  localStorage.removeItem('teacherKey');
   go('');
 }
 
-function renderAccountBadge(profile) {
-  const lvl = profile.level;
-  return `
-    <div class="account-badge" title="${lvl.name}${lvl.nextName ? ` - ${Math.round(lvl.progress * 100)}% to ${lvl.nextName}` : ' - max level'}">
-      ${icon('star', 13)} <span>${escapeHtml(profile.username)}</span>
-      <span class="account-level">${escapeHtml(lvl.name)}</span>
-    </div>
-    <button class="btn btn-ghost btn-sm" onclick="logout()">${icon('logout')} Sign out</button>
-  `;
-}
-
-function renderAuthScreen(role) {
-  let mode = 'login'; // toggled between 'login' and 'signup' without leaving the page
-
-  const draw = () => {
-    const isSignup = mode === 'signup';
-    mainEl().innerHTML = `
-      <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
-      <div class="card" style="max-width: 420px; margin: 20px auto;">
-        <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon(role === 'teacher' ? 'chalkboard' : 'student', 26)}</div>
-        <h2>${role === 'teacher' ? 'Teacher' : 'Student'} ${isSignup ? 'sign up' : 'log in'}</h2>
-        <p>${isSignup ? 'Create an account to get started.' : 'Welcome back - log in to continue.'}</p>
-        <form id="auth-form">
-          <div class="field">
-            <label>Username</label>
-            <input class="input" id="auth-username" placeholder="e.g. wei_ling" autofocus required maxlength="40" />
-          </div>
-          <div class="field">
-            <label>Password</label>
-            <input class="input" type="password" id="auth-password" placeholder="${isSignup ? 'At least 8 characters' : 'Password'}" required minlength="${isSignup ? 8 : 1}" />
-          </div>
-          <div id="auth-error" class="error-text"></div>
-          <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} ${isSignup ? 'Create account' : 'Log in'}</button>
-        </form>
-        <div style="margin-top: 14px; text-align:center;">
-          <button class="muted-link" id="auth-toggle-mode">${isSignup ? 'Already have an account? Log in' : "New here? Create an account"}</button>
+function renderTeacherLogin() {
+  mainEl().innerHTML = `
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
+    <div class="card" style="max-width: 420px; margin: 20px auto;">
+      <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('key', 26)}</div>
+      <h2>Teacher passcode</h2>
+      <p>The passcode you set in your .env file when you set up the app.</p>
+      <form id="login-form">
+        <div class="field">
+          <input class="input" type="password" id="passcode" placeholder="Passcode" autofocus required />
         </div>
-      </div>
-    `;
-
-    document.getElementById('auth-toggle-mode').addEventListener('click', () => {
-      mode = isSignup ? 'login' : 'signup';
-      draw();
-    });
-
-    document.getElementById('auth-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('auth-username').value.trim();
-      const password = document.getElementById('auth-password').value;
-      const errorEl = document.getElementById('auth-error');
-      errorEl.textContent = '';
-      try {
-        const { token, profile } = isSignup
-          ? await Api.signup(username, password, role)
-          : await Api.login(username, password);
-        if (profile.role !== role) {
-          errorEl.textContent = `That account is a ${profile.role} account, not a ${role} account.`;
-          return;
-        }
-        setAuth(token, profile);
-        go(role);
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    });
-  };
-
-  draw();
+        <div id="login-error" class="error-text"></div>
+        <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Enter dashboard</button>
+      </form>
+    </div>
+  `;
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const passcode = document.getElementById('passcode').value;
+    const errorEl = document.getElementById('login-error');
+    errorEl.textContent = '';
+    try {
+      await Api.login(passcode);
+      localStorage.setItem('teacherKey', passcode);
+      go('teacher');
+    } catch (err) {
+      errorEl.textContent = err.message;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------
 // Teacher: dashboard
 // ---------------------------------------------------------------------
 
-function renderTeacherTopActions(profile) {
-  topActionsEl().insertAdjacentHTML('beforeend', renderAccountBadge(profile));
+function renderTeacherTopActions() {
+  topActionsEl().insertAdjacentHTML('beforeend', `
+    <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
+  `);
 }
 
 async function renderTeacher(rest) {
-  const auth = getAuth();
-  if (!auth || auth.profile.role !== 'teacher') return renderAuthScreen('teacher');
-  renderTeacherTopActions(auth.profile);
+  if (!isTeacherLoggedIn()) return renderTeacherLogin();
+  renderTeacherTopActions();
 
   const page = rest[0];
   if (!page) return renderTeacherDashboard();
@@ -609,7 +553,7 @@ function renderAttemptRow(quiz, attempt) {
       <div style="display:flex; align-items:center; gap:16px; width:100%;">
         ${seal}
         <div class="attempt-info">
-          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.studentLevel ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.studentLevel.name)}</span>` : ''}</div>
+          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.title)}</span>` : ''}</div>
           <div class="attempt-meta">
             ${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}
             ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
@@ -671,15 +615,7 @@ function getQueryParam(name) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-function renderStudentTopActions(profile) {
-  topActionsEl().insertAdjacentHTML('beforeend', renderAccountBadge(profile));
-}
-
 function renderStudent(rest) {
-  const auth = getAuth();
-  if (!auth || auth.profile.role !== 'student') return renderAuthScreen('student');
-  renderStudentTopActions(auth.profile);
-
   const page = rest[0];
   if (page === 'quiz') return renderStudentQuiz();
   if (page === 'done') return renderStudentDone();
@@ -699,6 +635,10 @@ function renderStudentJoin() {
           <label>Quiz code</label>
           <input class="input input-code" id="join-code" maxlength="6" inputmode="numeric" placeholder="000000" value="${escapeHtml(prefillCode)}" required />
         </div>
+        <div class="field">
+          <label>Your name</label>
+          <input class="input" id="join-name" placeholder="e.g. Wei Ling" required maxlength="60" />
+        </div>
         <div id="join-error" class="error-text"></div>
         <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Start quiz</button>
       </form>
@@ -708,10 +648,11 @@ function renderStudentJoin() {
   document.getElementById('join-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const code = document.getElementById('join-code').value.trim();
+    const name = document.getElementById('join-name').value.trim();
     const errorEl = document.getElementById('join-error');
     errorEl.textContent = '';
     try {
-      const { attemptId, quiz } = await Api.joinQuiz(code);
+      const { attemptId, quiz } = await Api.joinQuiz(code, name);
       state.studentAttemptId = attemptId;
       state.studentQuiz = quiz;
       state.studentAnswers = {};
@@ -895,17 +836,6 @@ function studentPrev() {
 async function studentSubmit() {
   const result = await Api.submitAttempt(state.studentAttemptId, state.studentAnswers);
   state.studentResult = result;
-
-  // The submit response carries the student's new running total - keep
-  // the cached profile in sync so the account badge and next screen
-  // both show the up-to-date level without an extra request.
-  const auth = getAuth();
-  if (auth) {
-    auth.profile.xpTotal = result.xpTotal;
-    auth.profile.level = result.level;
-    setAuth(auth.token, auth.profile);
-  }
-
   go('student/done');
 }
 
@@ -913,12 +843,16 @@ function renderStudentDone() {
   const result = state.studentResult;
   if (!result) return go('');
 
+  const isTopTitle = result.accuracyScore === 100 && result.longestStreak === state.studentQuiz.questions.length;
+
   mainEl().innerHTML = `
     <div style="text-align:center; padding-top: 30px;">
-      ${result.leveledUp ? `
-        <div class="level-up-banner">${icon('star', 16)} Level up! You're now <strong>${escapeHtml(result.level.name)}</strong></div>
-      ` : ''}
-      <div class="score-pair" style="margin-bottom:20px;">
+      <div class="title-reveal ${isTopTitle ? 'title-reveal-top' : ''}">
+        <div class="title-reveal-label">You are</div>
+        <div class="title-reveal-name">${escapeHtml(result.title)}</div>
+      </div>
+
+      <div class="score-pair" style="margin:22px 0 20px;">
         <div class="score-block">
           <div class="seal ${result.accuracyScore >= 60 ? 'jade' : ''}">
             <span class="seal-score">${result.accuracyScore}</span>
@@ -932,12 +866,6 @@ function renderStudentDone() {
         </div>
       </div>
 
-      <div class="level-progress" style="max-width:340px; margin:0 auto 24px;">
-        <div class="streak-track" style="justify-content:center; margin-bottom:6px;">${icon('star', 13)} ${escapeHtml(result.level.name)} &middot; ${result.xpTotal} XP total</div>
-        <div class="timer-track"><div class="timer-fill" style="width:${Math.round(result.level.progress * 100)}%; background:var(--accent);"></div></div>
-        ${result.level.nextName ? `<div class="score-label" style="margin-top:6px;">${Math.round(result.level.progress * 100)}% to ${escapeHtml(result.level.nextName)}</div>` : `<div class="score-label" style="margin-top:6px;">Top level reached</div>`}
-      </div>
-
       <h2>Quiz submitted</h2>
       <p>
         Your teacher can see your result now.
@@ -947,4 +875,9 @@ function renderStudentDone() {
       <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
     </div>
   `;
+
+  // A little fanfare when the title lands - bigger sting for the top
+  // title (a genuinely flawless run) than an ordinary finish.
+  if (isTopTitle) playStreakSound(10);
+  else playCorrectSound();
 }
