@@ -1,7 +1,8 @@
 // api.js
 //
-// Every request goes through here so the teacher passcode header and
-// error handling live in one place.
+// Every request goes through here. There's no login token - the
+// teacher passcode is stored in localStorage and sent as a header on
+// teacher-only requests; students don't authenticate at all.
 
 const Api = (() => {
   function teacherKey() {
@@ -10,7 +11,7 @@ const Api = (() => {
 
   async function request(method, url, body, opts = {}) {
     const headers = { 'Content-Type': 'application/json' };
-    if (opts.asTeacher) headers['x-teacher-key'] = teacherKey();
+    if (opts.teacher) headers['x-teacher-key'] = teacherKey();
 
     const res = await fetch(url, {
       method,
@@ -32,20 +33,21 @@ const Api = (() => {
   }
 
   return {
-    // Teacher auth
-    login: (passcode) => request('POST', '/api/teacher/login', { passcode }),
+    login: (passcode) => request('POST', '/api/login', { passcode }),
 
     // Teacher quiz management
-    listQuizzes: () => request('GET', '/api/quizzes', undefined, { asTeacher: true }),
-    createQuiz: (quizJson) => request('POST', '/api/quizzes', quizJson, { asTeacher: true }),
-    getQuiz: (id) => request('GET', `/api/quizzes/${id}`, undefined, { asTeacher: true }),
-    deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`, undefined, { asTeacher: true }),
-    updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings, { asTeacher: true }),
-    getResults: (id) => request('GET', `/api/quizzes/${id}/results`, undefined, { asTeacher: true }),
+    listQuizzes: () => request('GET', '/api/quizzes', undefined, { teacher: true }),
+    createQuiz: (quizJson) => request('POST', '/api/quizzes', quizJson, { teacher: true }),
+    getQuiz: (id) => request('GET', `/api/quizzes/${id}`, undefined, { teacher: true }),
+    deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`, undefined, { teacher: true }),
+    updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings, { teacher: true }),
+    getResults: (id) => request('GET', `/api/quizzes/${id}/results`, undefined, { teacher: true }),
 
-    // Student flow
+    // Student flow - no auth
     peekQuiz: (code) => request('GET', `/api/join/${code}`),
     joinQuiz: (code, studentName) => request('POST', `/api/join/${code}`, { studentName }),
     submitAttempt: (attemptId, answers) => request('POST', `/api/attempts/${attemptId}/submit`, { answers }),
+    checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs) =>
+      request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs }),
   };
 })();

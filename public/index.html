@@ -14,8 +14,8 @@
   // Applied before first paint so the page never flashes the default
   // theme and then switches - see js/app.js for the switcher itself.
   (function () {
-    var saved = localStorage.getItem('appTheme');
-    if (saved && saved !== 'ink-seal') document.documentElement.setAttribute('data-theme', saved);
+    var saved = localStorage.getItem('appTheme') || 'ricepaper';
+    if (saved !== 'ink-seal') document.documentElement.setAttribute('data-theme', saved);
   })();
 </script>
 </head>
@@ -32,6 +32,7 @@
     <div class="topbar-actions" id="topbar-actions"></div>
   </div>
   <main id="main"></main>
+  <div class="streak-banner" id="streak-banner"></div>
   <footer class="hint">Runs on your own server &middot; student names only, no accounts</footer>
 </div>
 

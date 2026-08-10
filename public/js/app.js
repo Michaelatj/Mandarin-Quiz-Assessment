@@ -8,23 +8,94 @@
 const state = {
   studentAttemptId: null,
   studentQuiz: null,
-  studentAnswers: {}, // { [questionId]: { value, usedMeaning, timeTakenMs } }
+  studentAnswers: {}, // { [questionId]: { value, usedMeaning, answeredAtMs, correct } }
   studentQuestionIndex: 0,
-  studentMeaningOn: false, // the "show meaning" toggle, on/off for the whole attempt
-  studentQuestionStartTimes: {}, // { [questionId]: Date.now() when first shown } - for the speed bonus
+  studentHintsUsed: {}, // { [questionId]: true } - which questions had the hint lamp clicked; one-way, can't un-use
+  studentQuizStartedAt: null, // Date.now() when the student started the quiz - the ONE clock the whole-quiz timer and every answer's speed bonus are measured against
+  studentStreak: 0, // current consecutive-correct streak
+  studentBestStreak: 0,
 };
 
-// Handle for the currently-running per-question countdown, if the quiz
-// has a time limit. Module-level (not in `state`) because it's a live
-// timer handle, not data - always cleared at the top of every
+// Handle for the running quiz-wide countdown, if the quiz has a time
+// limit. Module-level (not in `state`) because it's a live timer
+// handle, not data - always cleared at the top of every
 // renderStudentQuiz() call so re-renders never leave a duplicate
-// ticking in the background.
-let questionTimerInterval = null;
-function clearQuestionTimer() {
-  if (questionTimerInterval) {
-    clearInterval(questionTimerInterval);
-    questionTimerInterval = null;
+// ticking in the background. Unlike the old per-question timer, this
+// one is NOT restarted on every question - it just keeps ticking
+// against the fixed studentQuizStartedAt for the whole attempt.
+let quizTimerInterval = null;
+function clearQuizTimer() {
+  if (quizTimerInterval) {
+    clearInterval(quizTimerInterval);
+    quizTimerInterval = null;
   }
+}
+
+// ---------------------------------------------------------------------
+// Sound effects - synthesized with the Web Audio API, no audio files
+// to ship or license. A handful of short tones/chimes, Duolingo-style:
+// a soft "ding" per correct answer, a slightly bigger chime at streak
+// milestones, and a low buzz on a miss. All muted automatically if
+// the browser blocks autoplay before the student has interacted with
+// the page yet - the try/catch just no-ops in that case.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, startAt, durationSec, type = 'sine', peakGain = 0.12) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime + startAt);
+  gain.gain.linearRampToValueAtTime(peakGain, ctx.currentTime + startAt + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + durationSec);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(ctx.currentTime + startAt);
+  osc.stop(ctx.currentTime + startAt + durationSec + 0.02);
+}
+
+function playCorrectSound() {
+  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) { /* audio blocked, ignore */ }
+}
+function playIncorrectSound() {
+  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) { /* audio blocked, ignore */ }
+}
+function playStreakSound(streak) {
+  try {
+    // A short ascending arpeggio, one extra note for every milestone
+    // tier reached, so a 10-streak sounds bigger than a 3-streak.
+    const notes = [660, 880, 1046, 1318, 1568];
+    const tier = streak >= 10 ? 5 : streak >= 5 ? 4 : 3;
+    for (let i = 0; i < tier; i++) playTone(notes[i], i * 0.07, 0.16, 'triangle', 0.1);
+  } catch (_) { /* audio blocked, ignore */ }
+}
+
+// ---------------------------------------------------------------------
+// Toasts - the small pill that pops in from the top for streak/answer
+// feedback and for the meaning-hint warning. Reused for both so there's
+// one visual language for "something just happened" across the app.
+// ---------------------------------------------------------------------
+let toastTimeout = null;
+function showToast(text, variant = 'jade') {
+  const el = document.getElementById('streak-banner');
+  if (!el) return;
+  clearTimeout(toastTimeout);
+  el.textContent = text;
+  el.classList.remove('show', 'toast-jade', 'toast-warn', 'toast-big');
+  void el.offsetWidth; // restart the animation even if it's already showing
+  el.classList.add('show', variant === 'warn' ? 'toast-warn' : 'toast-jade');
+  toastTimeout = setTimeout(() => el.classList.remove('show'), 1700);
 }
 
 const mainEl = () => document.getElementById('main');
@@ -59,6 +130,7 @@ function go(hash) {
 // ---------------------------------------------------------------------
 
 const THEMES = [
+  { id: 'ricepaper', name: 'Rice Paper', swatch: '#8a5a35' },
   { id: 'ink-seal', name: 'Ink & Seal', swatch: '#c1442d' },
   { id: 'teahouse', name: 'Tea House', swatch: '#c88a35' },
   { id: 'midnightjade', name: 'Midnight Jade', swatch: '#5f9c7a' },
@@ -66,7 +138,7 @@ const THEMES = [
 ];
 
 function currentTheme() {
-  return localStorage.getItem('appTheme') || 'ink-seal';
+  return localStorage.getItem('appTheme') || 'ricepaper';
 }
 
 function applyTheme(id) {
@@ -151,53 +223,130 @@ window.addEventListener('DOMContentLoaded', render);
 
 function renderLanding() {
   mainEl().innerHTML = `
-    <div style="text-align:center; padding-top: 20px;">
-      <h1 style="font-size: 30px;">A quiet place to quiz</h1>
-      <p>Bring questions your AI chatbot wrote, share a code, see who understood the lesson.</p>
+    <nav class="nav-menu">
+      <a href="#home-top">Home</a>
+      <a href="#how-it-works">How It Works</a>
+      <a href="#features">Features</a>
+      <a href="#choose-role">Get Started</a>
+    </nav>
+
+    <div class="hero reveal" id="home-top">
+      <div class="eyebrow">${icon('paper', 12)} A self-hosted classroom quiz tool</div>
+      <h1>A quiet place to quiz</h1>
+      <p class="lede">Bring questions your AI chatbot wrote, share a 6-digit code, and watch understanding show up in real time - no accounts required to take a quiz, no spreadsheets to grade by hand.</p>
     </div>
+
+    <div class="section-title reveal" id="how-it-works">${icon('copy', 14)} How it works</div>
+    <div class="use-case-grid">
+      <div class="use-case-card reveal">
+        <div class="step">01</div>
+        <h4>Teacher writes a quiz in minutes</h4>
+        <p>Paste your lesson material into any free AI chatbot with our ready-made prompt, then drop the JSON it returns straight into the app.</p>
+      </div>
+      <div class="use-case-card reveal">
+        <div class="step">02</div>
+        <h4>Students join with a code</h4>
+        <p>No sign-up, no app download - just the 6-digit code and their name, then straight into the quiz with a single overall timer.</p>
+      </div>
+      <div class="use-case-card reveal">
+        <div class="step">03</div>
+        <h4>Everyone sees results instantly</h4>
+        <p>Streaks and speed bonuses keep it fun while it's happening; the teacher's dashboard shows accuracy and full answer review right after.</p>
+      </div>
+    </div>
+
+    <div class="section-title reveal" id="features">${icon('users', 14)} Built for a real classroom</div>
+    <div class="use-case-grid">
+      <div class="use-case-card reveal">
+        <div class="step">${icon('clock', 16)}</div>
+        <h4>One quiz-wide timer</h4>
+        <p>A single countdown for the whole quiz, not per question - fairer for students who think longer on one hard character.</p>
+      </div>
+      <div class="use-case-card reveal">
+        <div class="step">${icon('check', 16)}</div>
+        <h4>Streaks that feel like a game</h4>
+        <p>Consecutive correct answers trigger an on-screen streak animation, on top of a separate XP score built for fun, not grading.</p>
+      </div>
+      <div class="use-case-card reveal">
+        <div class="step">${icon('paper', 16)}</div>
+        <h4>Two scores, two purposes</h4>
+        <p>An accuracy score out of 100 for the gradebook, and an uncapped XP score that rewards speed and streaks for the student.</p>
+      </div>
+    </div>
+
+    <div class="section-title reveal" id="choose-role">${icon('arrowRight', 14)} Choose your role</div>
     <div class="choice-grid">
-      <div class="choice-card" onclick="go('teacher')">
+      <div class="choice-card reveal" onclick="go('teacher')">
         <div class="icon">${icon('chalkboard', 30)}</div>
         <h3>I'm the teacher</h3>
         <p>Create quizzes and review results</p>
       </div>
-      <div class="choice-card" onclick="go('student/join')">
+      <div class="choice-card reveal" onclick="go('student/join')">
         <div class="icon">${icon('student', 30)}</div>
         <h3>I'm a student</h3>
         <p>Enter a code and take a quiz</p>
       </div>
     </div>
   `;
+  initScrollReveal();
+}
+
+// Fades/slides each .reveal element in the first time it crosses into
+// view, with a small stagger between elements in the same row so a
+// grid of cards doesn't all pop in at once. Elements already on
+// screen at load (usually just the hero) still get the animation -
+// IntersectionObserver fires for anything already intersecting as
+// soon as it's observed, not only on future scroll events.
+function initScrollReveal() {
+  if (window.__revealObserver) window.__revealObserver.disconnect();
+  const groups = {};
+  const els = Array.from(mainEl().querySelectorAll('.reveal'));
+  els.forEach((el) => {
+    const parentKey = el.parentElement;
+    groups[parentKey] = groups[parentKey] || 0;
+    el.style.setProperty('--delay', groups[parentKey]);
+    groups[parentKey] += 1;
+  });
+
+  if (!('IntersectionObserver' in window)) {
+    els.forEach((el) => el.classList.add('in-view'));
+    return;
+  }
+
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('in-view');
+        io.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.15 });
+  els.forEach((el) => io.observe(el));
+  window.__revealObserver = io;
 }
 
 // ---------------------------------------------------------------------
 // Teacher: login
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Auth - a single shared teacher passcode, same as the original
+// version of this app. Students never authenticate at all.
+// ---------------------------------------------------------------------
+
 function isTeacherLoggedIn() {
   return !!localStorage.getItem('teacherKey');
 }
 
-function renderTeacherTopActions() {
-  topActionsEl().insertAdjacentHTML('beforeend', `
-    <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
-  `);
-}
-
-async function renderTeacher(rest) {
-  if (!isTeacherLoggedIn()) return renderTeacherLogin();
-  renderTeacherTopActions();
-
-  const page = rest[0];
-  if (!page) return renderTeacherDashboard();
-  if (page === 'new') return renderTeacherNewQuiz();
-  if (page === 'quiz' && rest[1]) return renderTeacherResults(rest[1]);
-  return renderTeacherDashboard();
+function teacherLogout() {
+  localStorage.removeItem('teacherKey');
+  go('');
 }
 
 function renderTeacherLogin() {
   mainEl().innerHTML = `
-    <div class="card" style="max-width: 420px; margin: 40px auto;">
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
+    <div class="card" style="max-width: 420px; margin: 20px auto;">
       <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('key', 26)}</div>
       <h2>Teacher passcode</h2>
       <p>The passcode you set in your .env file when you set up the app.</p>
@@ -208,9 +357,6 @@ function renderTeacherLogin() {
         <div id="login-error" class="error-text"></div>
         <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Enter dashboard</button>
       </form>
-      <div style="margin-top: 14px; text-align:center;">
-        <button class="muted-link" onclick="go('')">Back home</button>
-      </div>
     </div>
   `;
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -228,14 +374,26 @@ function renderTeacherLogin() {
   });
 }
 
-function teacherLogout() {
-  localStorage.removeItem('teacherKey');
-  go('');
-}
-
 // ---------------------------------------------------------------------
 // Teacher: dashboard
 // ---------------------------------------------------------------------
+
+function renderTeacherTopActions() {
+  topActionsEl().insertAdjacentHTML('beforeend', `
+    <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
+  `);
+}
+
+async function renderTeacher(rest) {
+  if (!isTeacherLoggedIn()) return renderTeacherLogin();
+  renderTeacherTopActions();
+
+  const page = rest[0];
+  if (!page) return renderTeacherDashboard();
+  if (page === 'new') return renderTeacherNewQuiz();
+  if (page === 'quiz' && rest[1]) return renderTeacherResults(rest[1]);
+  return renderTeacherDashboard();
+}
 
 async function renderTeacherDashboard() {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading your quizzes…</p></div>`;
@@ -391,9 +549,9 @@ async function renderTeacherResults(quizId) {
     </label>
 
     <div class="field" style="max-width:260px; margin-bottom:24px;">
-      <label>Time limit per question (seconds)</label>
+      <label>Total time limit for the whole quiz (seconds)</label>
       <input class="input" type="number" min="0" step="1" id="time-limit-input" value="${quiz.timeLimitSeconds || 0}" placeholder="0 = off" />
-      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. When set, a correct answer scores up to 50% bonus for answering quickly - like a game.</p>
+      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. One countdown for the entire quiz, not per question. A correct answer's XP score gets up to +50% for answering early, plus a streak bonus for consecutive correct answers - accuracy score (the gradebook number) is never affected.</p>
     </div>
 
     <div class="section-title">${icon('users', 14)} ${attempts.length} response${attempts.length === 1 ? '' : 's'}</div>
@@ -421,7 +579,7 @@ function renderAttemptRow(quiz, attempt) {
   const pending = !attempt.submittedAt;
   const seal = pending
     ? `<div class="seal"><span class="seal-score">…</span><span class="seal-total">in progress</span></div>`
-    : `<div class="seal ${attempt.score / attempt.total >= 0.6 ? 'jade' : ''}"><span class="seal-score">${attempt.score}</span><span class="seal-total">of ${attempt.total}</span></div>`;
+    : `<div class="seal ${attempt.accuracyScore >= 60 ? 'jade' : ''}"><span class="seal-score">${attempt.accuracyScore}</span><span class="seal-total">of 100</span></div>`;
 
   const reviewId = `review-${attempt.id}`;
 
@@ -430,8 +588,11 @@ function renderAttemptRow(quiz, attempt) {
       <div style="display:flex; align-items:center; gap:16px; width:100%;">
         ${seal}
         <div class="attempt-info">
-          <div class="attempt-name">${escapeHtml(attempt.studentName)}</div>
-          <div class="attempt-meta">${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}</div>
+          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.title)}</span>` : ''}</div>
+          <div class="attempt-meta">
+            ${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}
+            ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
+          </div>
         </div>
         ${!pending ? `<button class="btn btn-ghost btn-sm" onclick="toggleReview('${reviewId}')">${icon('paper', 14)} Review</button>` : ''}
       </div>
@@ -531,8 +692,10 @@ function renderStudentJoin() {
       state.studentQuiz = quiz;
       state.studentAnswers = {};
       state.studentQuestionIndex = 0;
-      state.studentMeaningOn = false;
-      state.studentQuestionStartTimes = {};
+      state.studentHintsUsed = {};
+      state.studentQuizStartedAt = Date.now();
+      state.studentStreak = 0;
+      state.studentBestStreak = 0;
       go('student/quiz');
     } catch (err) {
       errorEl.textContent = err.message;
@@ -546,7 +709,7 @@ function renderStudentJoin() {
 
 function renderStudentQuiz() {
   if (!state.studentQuiz) return go('student/join');
-  clearQuestionTimer();
+  clearQuizTimer();
 
   const quiz = state.studentQuiz;
   const i = state.studentQuestionIndex;
@@ -555,43 +718,50 @@ function renderStudentQuiz() {
   const isLast = i === total - 1;
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
-  const showMeaning = state.studentMeaningOn && (q.questionMeaning || q.optionMeanings);
+  const hintUsed = !!state.studentHintsUsed[q.id];
+  const showMeaning = hintUsed && (q.questionMeaning || q.optionMeanings);
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
 
-  // Only stamped the first time this question is shown - re-renders
-  // from selecting an option, toggling meaning, etc. don't reset it.
-  if (timeLimitSeconds > 0 && state.studentQuestionStartTimes[q.id] === undefined) {
-    state.studentQuestionStartTimes[q.id] = Date.now();
-  }
-
-  const optionsHtml = q.options.map((opt, idx) => `
-    <div class="option ${currentValue === opt ? 'selected' : ''}" data-option-index="${idx}">
+  const optionsHtml = q.options.map((opt, idx) => {
+    let feedbackClass = '';
+    if (currentAnswer && currentValue === opt) {
+      feedbackClass = currentAnswer.correct === true ? 'answered-correct'
+        : currentAnswer.correct === false ? 'answered-incorrect'
+        : 'checking'; // optimistic state while waiting on the correctness check
+    }
+    return `
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
       <span class="option-marker"></span>
       <span>
         <span>${escapeHtml(opt)}</span>
         ${showMeaning && q.optionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
       </span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   mainEl().innerHTML = `
     <div class="progress-track"><div class="progress-fill" style="width:${((i + 1) / total) * 100}%"></div></div>
 
     ${timeLimitSeconds > 0 ? `
       <div class="timer-row">
-        <span>${icon('clock', 14)} Answer quickly for a speed bonus</span>
+        <span>${icon('clock', 14)} One timer for the whole quiz - answer quickly for a bigger bonus</span>
         <span id="timer-value">${timeLimitSeconds}s</span>
       </div>
       <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
     ` : ''}
 
-    <label class="switch-label" id="meaning-toggle-label">
-      <input type="checkbox" id="meaning-toggle" ${state.studentMeaningOn ? 'checked' : ''} />
-      <span class="switch-track"></span>
-      <span>Show meaning - correct answers earn half credit while it's on</span>
-    </label>
+    ${state.studentStreak > 0 ? `
+      <div class="streak-track"><span class="streak-flame">${icon('check', 14)}</span> ${state.studentStreak} in a row</div>
+    ` : ''}
 
     <div class="question-block">
-      <div class="question-index">Question ${i + 1} of ${total}</div>
+      <div class="row-between" style="margin-bottom: 2px;">
+        <div class="question-index">Question ${i + 1} of ${total}</div>
+        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button"
+          title="${hintUsed ? 'Hint used - this question is worth half credit if correct' : 'Show a hint (halves credit for this question if correct)'}">
+          ${icon('lightbulb', 18)}
+        </button>
+      </div>
       <div class="question-text">${escapeHtml(q.question)}</div>
       ${showMeaning && q.questionMeaning ? `<div class="meaning-text">${escapeHtml(q.questionMeaning)}</div>` : ''}
       <div class="option-list">${optionsHtml}</div>
@@ -614,50 +784,133 @@ function renderStudentQuiz() {
     });
   });
 
-  document.getElementById('meaning-toggle').addEventListener('change', (e) => {
-    state.studentMeaningOn = e.target.checked;
+  document.getElementById('hint-lamp-btn').addEventListener('click', () => {
+    if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
+    state.studentHintsUsed[q.id] = true;
+    showToast('Hint shown - this question now worth half credit', 'warn');
     renderStudentQuiz();
   });
 
-  if (timeLimitSeconds > 0) startQuestionTimer(q.id, timeLimitSeconds, isLast);
+  if (timeLimitSeconds > 0) startQuizTimer(timeLimitSeconds, isLast);
 }
 
-// Ticks the visible countdown for the current question. Reads the
-// fixed start time stamped in renderStudentQuiz rather than counting
-// its own elapsed time, so re-renders (selecting an option, toggling
-// meaning) never reset or double-count the clock.
-function startQuestionTimer(questionId, timeLimitSeconds, isLast) {
-  const startedAt = state.studentQuestionStartTimes[questionId];
+// Ticks the visible countdown for the WHOLE quiz. Reads the fixed
+// studentQuizStartedAt stamped at join time rather than counting its
+// own elapsed time, so re-renders (selecting an option, moving
+// between questions, using a hint) never reset or double-count the
+// clock - it's the same clock from the first question to the last.
+function startQuizTimer(timeLimitSeconds, isLast) {
   const limitMs = timeLimitSeconds * 1000;
 
   const tick = () => {
     const valueEl = document.getElementById('timer-value');
     const fillEl = document.getElementById('timer-fill');
     if (!valueEl || !fillEl) {
-      // The student navigated away from this question already -
-      // nothing left to update, stop ticking.
-      clearQuestionTimer();
+      // Navigated to a different route entirely - nothing left to
+      // update, stop ticking.
+      clearQuizTimer();
       return;
     }
-    const remainingMs = Math.max(0, limitMs - (Date.now() - startedAt));
+    const remainingMs = Math.max(0, limitMs - (Date.now() - state.studentQuizStartedAt));
     valueEl.textContent = `${Math.ceil(remainingMs / 1000)}s`;
     fillEl.style.width = `${(remainingMs / limitMs) * 100}%`;
 
     if (remainingMs <= 0) {
-      clearQuestionTimer();
+      clearQuizTimer();
       valueEl.textContent = "Time's up";
-      setTimeout(() => { isLast ? studentSubmit() : studentNext(); }, 900);
+      setTimeout(() => studentSubmit(), 900);
     }
   };
   tick();
-  questionTimerInterval = setInterval(tick, 250);
+  quizTimerInterval = setInterval(tick, 250);
 }
 
-function selectAnswer(questionId, value) {
-  const startedAt = state.studentQuestionStartTimes[questionId];
-  const timeTakenMs = typeof startedAt === 'number' ? Date.now() - startedAt : undefined;
-  state.studentAnswers[questionId] = { value, usedMeaning: state.studentMeaningOn, timeTakenMs };
+// A short burst of emoji flying outward from an element - the
+// "cheerful explosion" for a correct answer.
+function explodeAt(el, emojis, count) {
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const container = document.createElement('div');
+  container.className = 'fx-burst';
+  container.style.left = `${cx}px`;
+  container.style.top = `${cy}px`;
+  for (let i = 0; i < count; i++) {
+    const span = document.createElement('span');
+    span.className = 'fx-particle';
+    span.textContent = emojis[Math.floor(Math.random() * emojis.length)];
+    const angle = Math.random() * Math.PI * 2;
+    const distance = 55 + Math.random() * 75;
+    span.style.setProperty('--dx', `${Math.cos(angle) * distance}px`);
+    span.style.setProperty('--dy', `${Math.sin(angle) * distance}px`);
+    span.style.setProperty('--rotate', `${Math.random() * 360 - 180}deg`);
+    span.style.animationDelay = `${Math.random() * 0.06}s`;
+    container.appendChild(span);
+  }
+  document.body.appendChild(container);
+  setTimeout(() => container.remove(), 900);
+}
+
+// A single sad emoji that drops and fades - the gentler "aww" cue for
+// a wrong answer, paired with the low buzz tone.
+function sadPopAt(el) {
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const span = document.createElement('span');
+  span.className = 'fx-sad';
+  span.textContent = ['😢', '😔', '💧'][Math.floor(Math.random() * 3)];
+  span.style.left = `${rect.left + rect.width / 2}px`;
+  span.style.top = `${rect.top}px`;
+  document.body.appendChild(span);
+  setTimeout(() => span.remove(), 850);
+}
+
+async function selectAnswer(questionId, value) {
+  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+  const hintUsed = !!state.studentHintsUsed[questionId];
+
+  // Optimistic local update so the option highlights and pulses
+  // ("checking...") right away, instead of sitting still until the
+  // network round trip finishes - the correct/incorrect payoff still
+  // waits on the server (it holds the answer key, the client never
+  // does), but the wait itself now visibly acknowledges the tap.
+  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null };
   renderStudentQuiz();
+
+  let correct = null;
+  try {
+    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, hintUsed, answeredAtMs);
+    correct = res.correct;
+  } catch (err) {
+    // Network hiccup - the answer is still recorded locally and still
+    // counts at final submit, it just won't animate right now.
+  }
+  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct };
+
+  if (correct === true) {
+    state.studentStreak += 1;
+    state.studentBestStreak = Math.max(state.studentBestStreak, state.studentStreak);
+    if (state.studentStreak === 3 || state.studentStreak === 5 || (state.studentStreak >= 10 && state.studentStreak % 5 === 0)) {
+      showToast(state.studentStreak >= 10 ? `${state.studentStreak} streak!!` : `${state.studentStreak} in a row!`, 'jade');
+      playStreakSound(state.studentStreak);
+    } else {
+      showToast('Correct!', 'jade');
+      playCorrectSound();
+    }
+  } else if (correct === false) {
+    state.studentStreak = 0;
+    playIncorrectSound();
+  }
+
+  // Only re-render + fire the effect if the student is still looking
+  // at this question - they may have already clicked Next.
+  if (state.studentQuiz.questions[state.studentQuestionIndex].id === questionId) {
+    renderStudentQuiz();
+    const el = mainEl().querySelector('.option.selected');
+    if (correct === true) explodeAt(el, ['🎉', '✨', '⭐', '🎊'], 14);
+    else if (correct === false) sadPopAt(el);
+  }
 }
 
 function studentNext() {
@@ -680,19 +933,41 @@ function renderStudentDone() {
   const result = state.studentResult;
   if (!result) return go('');
 
+  const isTopTitle = result.accuracyScore === 100 && result.longestStreak === state.studentQuiz.questions.length;
+
   mainEl().innerHTML = `
     <div style="text-align:center; padding-top: 30px;">
-      <div class="seal ${result.score / result.total >= 0.6 ? 'jade' : ''}" style="margin: 0 auto 20px;">
-        <span class="seal-score">${result.score}</span>
-        <span class="seal-total">of ${result.total}</span>
+      <div class="title-reveal ${isTopTitle ? 'title-reveal-top' : ''}">
+        <div class="title-reveal-label">You are</div>
+        <div class="title-reveal-name">${escapeHtml(result.title)}</div>
       </div>
+
+      <div class="score-pair" style="margin:22px 0 20px;">
+        <div class="score-block">
+          <div class="seal ${result.accuracyScore >= 60 ? 'jade' : ''}">
+            <span class="seal-score">${result.accuracyScore}</span>
+            <span class="seal-total">of 100</span>
+          </div>
+          <div class="score-label">Accuracy</div>
+        </div>
+        <div class="score-block">
+          <div class="xp-badge">${icon('check', 14)} ${result.xpScore} XP</div>
+          <div class="score-label">Game score</div>
+        </div>
+      </div>
+
       <h2>Quiz submitted</h2>
       <p>
         Your teacher can see your result now.
-        ${result.score > result.total ? ' Nice - you answered fast enough to earn a speed bonus.' : ''}
+        ${result.longestStreak >= 3 ? ` Best streak: ${result.longestStreak} in a row.` : ''}
         ${result.meaningUsedCount ? ` Meaning was shown on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
       </p>
       <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
     </div>
   `;
+
+  // A little fanfare when the title lands - bigger sting for the top
+  // title (a genuinely flawless run) than an ordinary finish.
+  if (isTopTitle) playStreakSound(10);
+  else playCorrectSound();
 }

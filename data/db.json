@@ -1,0 +1,23 @@
+{
+  "quizzes": [],
+  "attempts": [],
+  "students": [
+    {
+      "id": "QjtLz7WflQED",
+      "name": "Wei Ling",
+      "pin": "1234",
+      "createdAt": "2026-08-07T12:23:06.236Z"
+    }
+  ],
+  "teachers": [
+    {
+      "id": "oy9YZDAbWxpu",
+      "name": "Test Teacher",
+      "username": "teacher1",
+      "passwordHash": "bd94dcda26fccb4e68d6a31f9b5aac0b571ae266d822620e901ef7ebe3a11d4f",
+      "createdAt": "2026-08-07T12:23:00.836Z",
+      "isOwner": true,
+      "sessionToken": "rvc1OtUT4HtQ6t6rerk419Pas8iat0zT"
+    }
+  ]
+}
