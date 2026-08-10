@@ -722,6 +722,44 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 .question-text { font-family: var(--font-display); font-size: 19px; margin-bottom: 16px; }
 
 .option-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* Sentence-reorder: tap-to-build chip UI. Assembled row is where the
+   sentence takes shape; pool holds whatever hasn't been placed yet. */
+.reorder-assembled {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 52px;
+  padding: 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  align-items: center;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.reorder-assembled.checking { animation: option-pulse 0.9s ease-in-out infinite; }
+.reorder-assembled.answered-correct { border-style: solid; border-color: var(--jade); background: var(--jade-soft); }
+.reorder-assembled.answered-incorrect { border-style: solid; border-color: var(--accent); }
+.reorder-placeholder { color: var(--text-faint); font-size: 13px; }
+
+.reorder-pool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reorder-chip {
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 14.5px;
+  user-select: none;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.reorder-chip:hover { border-color: var(--accent); transform: translateY(-2px); }
+.reorder-chip[data-chip-kind="assembled"] { background: var(--accent-soft); border-color: var(--accent); }
 .option {
   display: flex;
   align-items: center;
@@ -933,6 +971,30 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
   max-height: 340px;
   overflow-y: auto;
 }
+
+.kind-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+.kind-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.kind-check:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.kind-check input { margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+.kind-check-label { display: block; font-size: 13.5px; font-weight: 600; }
+.kind-check-hint { display: block; font-size: 12px; color: var(--text-faint); margin-top: 2px; }
 
 .section-title {
   display: flex;

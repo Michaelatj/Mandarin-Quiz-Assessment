@@ -11,6 +11,7 @@ const state = {
   studentAnswers: {}, // { [questionId]: { value, usedMeaning, answeredAtMs, correct } }
   studentQuestionIndex: 0,
   studentHintsUsed: {}, // { [questionId]: true } - which questions had the hint lamp clicked; one-way, can't un-use
+  studentReorderProgress: {}, // { [questionId]: [chunkId, ...] } - a sentence_reorder question's in-progress tap order, before all chunks are placed
   studentQuizStartedAt: null, // Date.now() when the student started the quiz - the ONE clock the whole-quiz timer and every answer's speed bonus are measured against
   studentStreak: 0, // current consecutive-correct streak
   studentBestStreak: 0,
@@ -439,13 +440,36 @@ function renderTeacherNewQuiz() {
     <p>Two steps: get a quiz written for you by any free AI chatbot, then paste what it gives you below.</p>
 
     <div class="section-title">${icon('copy', 14)} Step 1 · Copy this prompt</div>
-    <div class="field" style="max-width:220px;">
-      <label>Student HSK level</label>
-      <select class="input" id="hsk-level">
-        ${[1, 2, 3, 4, 5, 6].map((lvl) => `<option value="${lvl}" ${lvl === 1 ? 'selected' : ''}>HSK ${lvl}</option>`).join('')}
-      </select>
+    <div class="row-between" style="align-items:flex-end; flex-wrap:wrap; gap:16px; margin-bottom:14px;">
+      <div class="field" style="max-width:220px; margin-bottom:0;">
+        <label>Student HSK level</label>
+        <select class="input" id="hsk-level">
+          ${[1, 2, 3, 4, 5, 6].map((lvl) => `<option value="${lvl}" ${lvl === 1 ? 'selected' : ''}>HSK ${lvl}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="max-width:140px; margin-bottom:0;">
+        <label>Number of questions</label>
+        <input class="input" type="number" id="question-count" min="4" max="30" value="10" />
+      </div>
     </div>
-    <p style="margin-bottom:10px;">Paste it into ChatGPT, Gemini, Grok, Claude, or any chatbot, with your lesson material dropped in where marked. The AI keeps the vocabulary near this level and uses Hanzi with pinyin, not full English.</p>
+
+    <div class="field" style="margin-bottom:14px;">
+      <label>Question types to include</label>
+      <div class="kind-grid">
+        ${QUESTION_KINDS.map((k) => `
+          <label class="kind-check">
+            <input type="checkbox" data-kind-id="${k.id}" ${k.defaultOn ? 'checked' : ''} />
+            <span>
+              <span class="kind-check-label">${escapeHtml(k.label)}</span>
+              <span class="kind-check-hint">${escapeHtml(k.hint)}</span>
+            </span>
+          </label>
+        `).join('')}
+      </div>
+      <div id="kind-error" class="error-text"></div>
+    </div>
+
+    <p style="margin-bottom:10px;">Paste it into ChatGPT, Gemini, Grok, Claude, or any chatbot, with your lesson material dropped in where marked.</p>
     <div class="prompt-box" id="prompt-box"></div>
     <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyPrompt()">${icon('copy')} Copy prompt</button>
 
@@ -461,11 +485,27 @@ function renderTeacherNewQuiz() {
 
   const promptBox = document.getElementById('prompt-box');
   const levelSelect = document.getElementById('hsk-level');
+  const countInput = document.getElementById('question-count');
+  const kindCheckboxes = Array.from(document.querySelectorAll('[data-kind-id]'));
+  const kindError = document.getElementById('kind-error');
+
   const updatePromptText = () => {
-    promptBox.textContent = QUIZ_PROMPT_TEMPLATE.replaceAll('{{HSK_LEVEL}}', levelSelect.value);
+    const kindIds = kindCheckboxes.filter((c) => c.checked).map((c) => c.dataset.kindId);
+    if (kindIds.length === 0) {
+      kindError.textContent = 'Pick at least one question type.';
+      promptBox.textContent = '';
+      return;
+    }
+    kindError.textContent = '';
+    let count = parseInt(countInput.value, 10);
+    if (!Number.isFinite(count) || count < 1) count = 10;
+    count = Math.min(30, Math.max(4, count));
+    promptBox.textContent = buildQuizPrompt({ hskLevel: levelSelect.value, questionCount: count, kindIds });
   };
   updatePromptText();
   levelSelect.addEventListener('change', updatePromptText);
+  countInput.addEventListener('input', updatePromptText);
+  kindCheckboxes.forEach((c) => c.addEventListener('change', updatePromptText));
 
   document.getElementById('quiz-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -606,14 +646,26 @@ function renderAnswerReview(quiz, attempt) {
     const given = attempt.answers[q.id];
     const value = given ? given.value : undefined;
     const usedMeaning = given && given.usedMeaning === true;
-    const isCorrect = value === q.answer;
+
+    let isCorrect, answeredText, correctText;
+    if (q.type === 'sentence_reorder') {
+      const total = q.chunks.length;
+      isCorrect = Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+      answeredText = Array.isArray(value) ? value.map((id) => q.chunks[id]).join(' ') : '(no answer)';
+      correctText = q.chunks.join(' ');
+    } else {
+      isCorrect = value === q.answer;
+      answeredText = value ?? '(no answer)';
+      correctText = q.answer;
+    }
+
     return `
       <div class="answer-line">
         <span class="mark ${isCorrect ? 'correct' : 'incorrect'}">${icon(isCorrect ? 'check' : 'x', 15)}</span>
         <div>
           <div>${escapeHtml(q.question)}</div>
           <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Answered: ${escapeHtml(value ?? '(no answer)')}${!isCorrect ? ` · Correct: ${escapeHtml(q.answer)}` : ''}
+            Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}
             ${usedMeaning && isCorrect ? ' · meaning was shown, half credit' : ''}
           </div>
         </div>
@@ -693,6 +745,7 @@ function renderStudentJoin() {
       state.studentAnswers = {};
       state.studentQuestionIndex = 0;
       state.studentHintsUsed = {};
+      state.studentReorderProgress = {};
       state.studentQuizStartedAt = Date.now();
       state.studentStreak = 0;
       state.studentBestStreak = 0;
@@ -716,28 +769,11 @@ function renderStudentQuiz() {
   const q = quiz.questions[i];
   const total = quiz.questions.length;
   const isLast = i === total - 1;
-  const currentAnswer = state.studentAnswers[q.id];
-  const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const hintUsed = !!state.studentHintsUsed[q.id];
-  const showMeaning = hintUsed && (q.questionMeaning || q.optionMeanings);
+  const showMeaning = hintUsed && !!q.questionMeaning;
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
 
-  const optionsHtml = q.options.map((opt, idx) => {
-    let feedbackClass = '';
-    if (currentAnswer && currentValue === opt) {
-      feedbackClass = currentAnswer.correct === true ? 'answered-correct'
-        : currentAnswer.correct === false ? 'answered-incorrect'
-        : 'checking'; // optimistic state while waiting on the correctness check
-    }
-    return `
-    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
-      <span class="option-marker"></span>
-      <span>
-        <span>${escapeHtml(opt)}</span>
-        ${showMeaning && q.optionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
-      </span>
-    </div>`;
-  }).join('');
+  const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
 
   mainEl().innerHTML = `
     <div class="progress-track"><div class="progress-fill" style="width:${((i + 1) / total) * 100}%"></div></div>
@@ -763,8 +799,8 @@ function renderStudentQuiz() {
         </button>
       </div>
       <div class="question-text">${escapeHtml(q.question)}</div>
-      ${showMeaning && q.questionMeaning ? `<div class="meaning-text">${escapeHtml(q.questionMeaning)}</div>` : ''}
-      <div class="option-list">${optionsHtml}</div>
+      ${showMeaning ? `<div class="meaning-text">${escapeHtml(q.questionMeaning)}</div>` : ''}
+      ${answerAreaHtml}
     </div>
     <div class="row-between">
       <button class="btn btn-ghost" ${i === 0 ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
@@ -774,15 +810,8 @@ function renderStudentQuiz() {
     </div>
   `;
 
-  // Bound with addEventListener (not inline onclick) so option text -
-  // Hanzi, pinyin, quotes, anything - never has to survive being
-  // embedded inside an HTML attribute string.
-  mainEl().querySelectorAll('.option').forEach((el) => {
-    el.addEventListener('click', () => {
-      const opt = q.options[Number(el.dataset.optionIndex)];
-      selectAnswer(q.id, opt);
-    });
-  });
+  if (q.type === 'sentence_reorder') bindReorderEvents(q);
+  else bindMultipleChoiceEvents(q);
 
   document.getElementById('hint-lamp-btn').addEventListener('click', () => {
     if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
@@ -792,6 +821,119 @@ function renderStudentQuiz() {
   });
 
   if (timeLimitSeconds > 0) startQuizTimer(timeLimitSeconds, isLast);
+}
+
+function renderMultipleChoiceArea(q, hintUsed) {
+  const currentAnswer = state.studentAnswers[q.id];
+  const currentValue = currentAnswer ? currentAnswer.value : undefined;
+  const showOptionMeanings = hintUsed && !!q.optionMeanings;
+
+  const optionsHtml = q.options.map((opt, idx) => {
+    let feedbackClass = '';
+    if (currentAnswer && currentValue === opt) {
+      feedbackClass = currentAnswer.correct === true ? 'answered-correct'
+        : currentAnswer.correct === false ? 'answered-incorrect'
+        : 'checking'; // optimistic state while waiting on the correctness check
+    }
+    return `
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
+      <span class="option-marker"></span>
+      <span>
+        <span>${escapeHtml(opt)}</span>
+        ${showOptionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
+      </span>
+    </div>`;
+  }).join('');
+
+  return `<div class="option-list">${optionsHtml}</div>`;
+}
+
+function bindMultipleChoiceEvents(q) {
+  // Bound with addEventListener (not inline onclick) so option text -
+  // Hanzi, pinyin, quotes, anything - never has to survive being
+  // embedded inside an HTML attribute string.
+  mainEl().querySelectorAll('.option').forEach((el) => {
+    el.addEventListener('click', () => {
+      const opt = q.options[Number(el.dataset.optionIndex)];
+      selectAnswer(q.id, opt);
+    });
+  });
+}
+
+// Tap-to-build sentence area: word chunks start in a shuffled "pool";
+// tapping one moves it into the "assembled" row in the order tapped.
+// Tapping an assembled chunk sends it back to the pool. This is the
+// same interaction Duolingo-style sentence-building exercises use on
+// touch devices instead of true drag-and-drop, which is unreliable on
+// phones without a drag library - tapping works everywhere.
+function renderReorderArea(q) {
+  const finalized = state.studentAnswers[q.id];
+  const placed = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
+  const placedSet = new Set(placed);
+  const pool = q.chunks.filter((c) => !placedSet.has(c.id));
+
+  let assembledFeedbackClass = '';
+  if (finalized) {
+    assembledFeedbackClass = finalized.correct === true ? 'answered-correct'
+      : finalized.correct === false ? 'answered-incorrect'
+      : 'checking';
+  }
+
+  const chip = (chunk, kind) => `<div class="reorder-chip" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
+
+  return `
+    <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
+      ${placed.length === 0
+        ? `<span class="reorder-placeholder">Tap the words below in order to build the sentence</span>`
+        : placed.map((id) => chip(q.chunks.find((c) => c.id === id), 'assembled')).join('')}
+    </div>
+    <div class="reorder-pool" id="reorder-pool">
+      ${pool.map((c) => chip(c, 'pool')).join('')}
+    </div>
+    ${placed.length > 0 ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
+  `;
+}
+
+function bindReorderEvents(q) {
+  const total = q.chunks.length;
+
+  mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.chunkId);
+      const placed = [...(state.studentReorderProgress[q.id] || []), id];
+      if (placed.length === total) {
+        delete state.studentReorderProgress[q.id];
+        selectAnswer(q.id, placed);
+      } else {
+        state.studentReorderProgress[q.id] = placed;
+        renderStudentQuiz();
+      }
+    });
+  });
+
+  mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.chunkId);
+      // If this question was already finalized, tapping a chunk to
+      // remove it un-finalizes the answer so the student can fix the
+      // order and re-submit, same "change your mind" freedom the
+      // multiple-choice options already allow.
+      const finalized = state.studentAnswers[q.id];
+      const currentlyPlaced = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
+      if (finalized) delete state.studentAnswers[q.id];
+      state.studentReorderProgress[q.id] = currentlyPlaced.filter((x) => x !== id);
+      renderStudentQuiz();
+    });
+  });
+
+  const clearBtn = document.getElementById('reorder-clear-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      delete state.studentReorderProgress[q.id];
+      delete state.studentAnswers[q.id];
+      renderStudentQuiz();
+    });
+  }
 }
 
 // Ticks the visible countdown for the WHOLE quiz. Reads the fixed
@@ -907,7 +1049,10 @@ async function selectAnswer(questionId, value) {
   // at this question - they may have already clicked Next.
   if (state.studentQuiz.questions[state.studentQuestionIndex].id === questionId) {
     renderStudentQuiz();
-    const el = mainEl().querySelector('.option.selected');
+    const q = state.studentQuiz.questions.find((qq) => qq.id === questionId);
+    const el = q.type === 'sentence_reorder'
+      ? document.getElementById('reorder-assembled')
+      : mainEl().querySelector('.option.selected');
     if (correct === true) explodeAt(el, ['🎉', '✨', '⭐', '🎊'], 14);
     else if (correct === false) sadPopAt(el);
   }

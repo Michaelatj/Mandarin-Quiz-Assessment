@@ -58,15 +58,24 @@ function quizFromRow(row, questionRows = []) {
 }
 
 function questionFromRow(row) {
-  return {
+  const base = {
     id: row.id,
-    type: 'multiple_choice',
+    type: row.type || 'multiple_choice',
     question: row.question,
     questionMeaning: row.question_meaning || undefined,
+    points: Number(row.points),
+  };
+  if (base.type === 'sentence_reorder') {
+    // `options` holds the chunks in their CORRECT order for this
+    // type - see supabase/schema.sql. Shuffling for display happens
+    // only in toStudentView() in server.js, never here.
+    return { ...base, chunks: row.options };
+  }
+  return {
+    ...base,
     options: row.options,
     optionMeanings: row.option_meanings || undefined,
     answer: row.answer,
-    points: Number(row.points),
   };
 }
 
@@ -106,11 +115,12 @@ async function createQuiz(quiz) {
     id: q.id,
     quiz_id: quiz.id,
     position: i,
+    type: q.type || 'multiple_choice',
     question: q.question,
     question_meaning: q.questionMeaning || null,
-    options: q.options,
+    options: q.type === 'sentence_reorder' ? q.chunks : q.options,
     option_meanings: q.optionMeanings || null,
-    answer: q.answer,
+    answer: q.type === 'sentence_reorder' ? null : q.answer,
     points: q.points,
   }));
   unwrap(await supabase.from('questions').insert(questionRows));

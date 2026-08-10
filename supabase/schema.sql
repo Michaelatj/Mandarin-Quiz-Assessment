@@ -6,6 +6,25 @@
 -- teacher (gated by a shared passcode, see .env) and anonymous
 -- students (just a name typed in, same as the original version) -
 -- Supabase is used purely as durable storage, not for auth.
+--
+-- ALREADY RAN AN OLDER VERSION OF THIS FILE? `create table if not
+-- exists` won't add new columns to a table that already exists with
+-- a different shape (this is the same issue as the "Could not find
+-- the 'allow_retakes' column" error, if you've seen that before).
+-- If your `questions` table predates the "type" column (added for
+-- the sentence-reorder question kind), run this first:
+--
+--   alter table questions add column if not exists type text not null default 'multiple_choice';
+--   alter table questions alter column answer drop not null;
+--
+-- If anything else about your tables looks out of sync with what's
+-- below, the simplest fix is still to drop and recreate:
+--
+--   drop table if exists attempts cascade;
+--   drop table if exists questions cascade;
+--   drop table if exists quizzes cascade;
+--
+-- then run this whole file fresh.
 
 create table if not exists quizzes (
   id text primary key,
@@ -22,11 +41,12 @@ create table if not exists questions (
   id text primary key,
   quiz_id text not null references quizzes(id) on delete cascade,
   position integer not null,
+  type text not null default 'multiple_choice', -- 'multiple_choice' or 'sentence_reorder'
   question text not null,
   question_meaning text,
-  options jsonb not null,
-  option_meanings jsonb,
-  answer text not null,
+  options jsonb not null, -- multiple_choice: the choices. sentence_reorder: the chunks, in CORRECT order (shuffled only when sent to a student)
+  option_meanings jsonb, -- multiple_choice only
+  answer text, -- multiple_choice only - null for sentence_reorder, whose correct order IS `options` itself
   points numeric not null default 1
 );
 create index if not exists questions_quiz_idx on questions (quiz_id);

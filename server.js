@@ -65,7 +65,7 @@ app.post('/api/login', (req, res) => {
 // fields that matter for grading.
 // ---------------------------------------------------------------------
 
-const QUESTION_TYPES = ['multiple_choice'];
+const QUESTION_TYPES = ['multiple_choice', 'sentence_reorder'];
 
 function validateQuiz(payload) {
   const errors = [];
@@ -90,15 +90,23 @@ function validateQuiz(payload) {
     }
     const type = q.type || 'multiple_choice';
     if (!QUESTION_TYPES.includes(type)) {
-      errors.push(`${label}: only "multiple_choice" questions are supported.`);
+      errors.push(`${label}: "type" must be "multiple_choice" or "sentence_reorder".`);
+      return;
     }
-    if (!Array.isArray(q.options) || q.options.length < 4) {
-      errors.push(`${label}: needs an "options" array with at least 4 choices (aim for 5-6 so the app can rotate distractors).`);
-    } else if (q.answer === undefined || !q.options.includes(q.answer)) {
-      errors.push(`${label}: "answer" must exactly match one of the "options".`);
-    } else if (q.optionMeanings !== undefined) {
-      if (!Array.isArray(q.optionMeanings) || q.optionMeanings.length !== q.options.length) {
-        errors.push(`${label}: "optionMeanings" must be an array the same length as "options".`);
+
+    if (type === 'sentence_reorder') {
+      if (!Array.isArray(q.chunks) || q.chunks.length < 3) {
+        errors.push(`${label}: needs a "chunks" array with at least 3 pieces.`);
+      }
+    } else {
+      if (!Array.isArray(q.options) || q.options.length < 4) {
+        errors.push(`${label}: needs an "options" array with at least 4 choices (aim for 5-6 so the app can rotate distractors).`);
+      } else if (q.answer === undefined || !q.options.includes(q.answer)) {
+        errors.push(`${label}: "answer" must exactly match one of the "options".`);
+      } else if (q.optionMeanings !== undefined) {
+        if (!Array.isArray(q.optionMeanings) || q.optionMeanings.length !== q.options.length) {
+          errors.push(`${label}: "optionMeanings" must be an array the same length as "options".`);
+        }
       }
     }
     if (q.questionMeaning !== undefined && typeof q.questionMeaning !== 'string') {
@@ -119,16 +127,25 @@ function normalizeQuiz(payload) {
     // countdown for the WHOLE quiz (not per question) - see
     // toStudentView and recomputeScore below.
     allowRetakes: true,
-    questions: payload.questions.map((q) => ({
-      id: nanoid(8),
-      type: 'multiple_choice',
-      question: q.question.trim(),
-      questionMeaning: q.questionMeaning ? String(q.questionMeaning).trim() : undefined,
-      options: q.options,
-      optionMeanings: Array.isArray(q.optionMeanings) ? q.optionMeanings : undefined,
-      answer: q.answer,
-      points: typeof q.points === 'number' ? q.points : 1,
-    })),
+    questions: payload.questions.map((q) => {
+      const type = q.type === 'sentence_reorder' ? 'sentence_reorder' : 'multiple_choice';
+      const base = {
+        id: nanoid(8),
+        type,
+        question: q.question.trim(),
+        questionMeaning: q.questionMeaning ? String(q.questionMeaning).trim() : undefined,
+        points: typeof q.points === 'number' ? q.points : 1,
+      };
+      if (type === 'sentence_reorder') {
+        return { ...base, chunks: q.chunks.map((c) => String(c).trim()) };
+      }
+      return {
+        ...base,
+        options: q.options,
+        optionMeanings: Array.isArray(q.optionMeanings) ? q.optionMeanings : undefined,
+        answer: q.answer,
+      };
+    }),
   };
 }
 
@@ -166,7 +183,10 @@ function pickDisplayOptions(q, maxCount = 4) {
 
 // Strip answers before sending a quiz to a student, randomize question
 // and option order (see pickDisplayOptions), and strip pinyin here on
-// the server when the teacher has hidePinyin turned on.
+// the server when the teacher has hidePinyin turned on - this applies
+// uniformly to every question type, including sentence_reorder's
+// chunks, so the teacher's one hidePinyin setting genuinely covers
+// every kind of question, not just multiple choice.
 function toStudentView(quiz) {
   const hide = !!quiz.hidePinyin;
   return {
@@ -176,6 +196,23 @@ function toStudentView(quiz) {
     description: quiz.description,
     timeLimitSeconds: quiz.timeLimitSeconds || 0,
     questions: shuffle(quiz.questions).map((q) => {
+      if (q.type === 'sentence_reorder') {
+        // Each chunk's `id` is its index in the CORRECT order - the
+        // client only ever sees the shuffled display order, but
+        // submits back an array of these ids, so checking correctness
+        // is just "does the submitted id order equal [0,1,2,...]".
+        // The correct order itself is never sent to the student.
+        const shuffledChunks = shuffle(
+          q.chunks.map((text, id) => ({ id, text: hide ? stripPinyin(text) : text }))
+        );
+        return {
+          id: q.id,
+          type: q.type,
+          question: hide ? stripPinyin(q.question) : q.question,
+          questionMeaning: q.questionMeaning,
+          chunks: shuffledChunks,
+        };
+      }
       const picked = pickDisplayOptions(q);
       return {
         id: q.id,
@@ -274,6 +311,19 @@ app.post('/api/join/:code', async (req, res) => {
 //    into computeTitle() below for the fun label shown at the end -
 //    this app has no accounts, so nothing here persists between
 //    quizzes, it's all scoped to this one attempt.
+// True for either question type: a plain string match for
+// multiple_choice, or - for sentence_reorder - the submitted array of
+// chunk ids equaling [0, 1, 2, ...] (each chunk's id IS its correct
+// position, assigned in toStudentView; getting every id in ascending
+// order means the student reconstructed the original sentence).
+function isAnswerCorrect(q, value) {
+  if (q.type === 'sentence_reorder') {
+    const total = q.chunks.length;
+    return Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+  }
+  return value === q.answer;
+}
+
 function recomputeScore(answers, answerOrderIn, quiz) {
   const limitMs = (quiz.timeLimitSeconds || 0) * 1000;
   const totalPoints = quiz.questions.reduce((sum, q) => sum + q.points, 0);
@@ -294,7 +344,7 @@ function recomputeScore(answers, answerOrderIn, quiz) {
     const usedMeaning = typeof given === 'object' && given.usedMeaning === true;
     const answeredAtMs = typeof given === 'object' && typeof given.answeredAtMs === 'number' ? given.answeredAtMs : null;
 
-    if (value !== q.answer) { streak = 0; return; }
+    if (!isAnswerCorrect(q, value)) { streak = 0; return; }
 
     correctCount += 1;
     streak += 1;
@@ -323,10 +373,11 @@ function recomputeScore(answers, answerOrderIn, quiz) {
 }
 
 // Immediate correctness check, called right after the student picks an
-// option - this is what powers the on-screen streak animation while
-// the quiz is still in progress. It records the answer (so a student
-// who never hits "submit" isn't lost) but does NOT finalize the
-// attempt - /submit below is still the source of truth.
+// option (or finishes arranging a sentence_reorder question) - this is
+// what powers the on-screen streak animation while the quiz is still
+// in progress. It records the answer (so a student who never hits
+// "submit" isn't lost) but does NOT finalize the attempt - /submit
+// below is still the source of truth.
 app.post('/api/attempts/:attemptId/answer', async (req, res) => {
   const { questionId, value, usedMeaning, answeredAtMs } = req.body || {};
   if (!questionId) return res.status(400).json({ error: 'Missing questionId.' });
@@ -342,7 +393,7 @@ app.post('/api/attempts/:attemptId/answer', async (req, res) => {
   const outcome = await db.recordAnswer(attempt.id, questionId, given);
   if (outcome === 'already_submitted') return res.status(409).json({ error: 'This attempt was already submitted.' });
 
-  res.json({ correct: value === q.answer });
+  res.json({ correct: isAnswerCorrect(q, value) });
 });
 
 app.post('/api/attempts/:attemptId/submit', async (req, res) => {
