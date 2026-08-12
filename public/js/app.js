@@ -10,20 +10,13 @@ const state = {
   studentQuiz: null,
   studentAnswers: {}, // { [questionId]: { value, usedMeaning, answeredAtMs, correct } }
   studentQuestionIndex: 0,
-  studentHintsUsed: {}, // { [questionId]: true } - which questions had the hint lamp clicked; one-way, can't un-use
-  studentReorderProgress: {}, // { [questionId]: [chunkId, ...] } - a sentence_reorder question's in-progress tap order, before all chunks are placed
-  studentQuizStartedAt: null, // Date.now() when the student started the quiz - the ONE clock the whole-quiz timer and every answer's speed bonus are measured against
-  studentStreak: 0, // current consecutive-correct streak
+  studentHintsUsed: {}, // { [questionId]: true }
+  studentReorderProgress: {}, // { [questionId]: [chunkId, ...] }
+  studentQuizStartedAt: null,
+  studentStreak: 0,
   studentBestStreak: 0,
 };
 
-// Handle for the running quiz-wide countdown, if the quiz has a time
-// limit. Module-level (not in `state`) because it's a live timer
-// handle, not data - always cleared at the top of every
-// renderStudentQuiz() call so re-renders never leave a duplicate
-// ticking in the background. Unlike the old per-question timer, this
-// one is NOT restarted on every question - it just keeps ticking
-// against the fixed studentQuizStartedAt for the whole attempt.
 let quizTimerInterval = null;
 function clearQuizTimer() {
   if (quizTimerInterval) {
@@ -33,12 +26,7 @@ function clearQuizTimer() {
 }
 
 // ---------------------------------------------------------------------
-// Sound effects - synthesized with the Web Audio API, no audio files
-// to ship or license. A handful of short tones/chimes, Duolingo-style:
-// a soft "ding" per correct answer, a slightly bigger chime at streak
-// milestones, and a low buzz on a miss. All muted automatically if
-// the browser blocks autoplay before the student has interacted with
-// the page yet - the try/catch just no-ops in that case.
+// Sound effects
 // ---------------------------------------------------------------------
 let audioCtx = null;
 function getAudioCtx() {
@@ -67,25 +55,21 @@ function playTone(freq, startAt, durationSec, type = 'sine', peakGain = 0.12) {
 }
 
 function playCorrectSound() {
-  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) { /* audio blocked, ignore */ }
+  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) {}
 }
 function playIncorrectSound() {
-  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) { /* audio blocked, ignore */ }
+  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) {}
 }
 function playStreakSound(streak) {
   try {
-    // A short ascending arpeggio, one extra note for every milestone
-    // tier reached, so a 10-streak sounds bigger than a 3-streak.
     const notes = [660, 880, 1046, 1318, 1568];
     const tier = streak >= 10 ? 5 : streak >= 5 ? 4 : 3;
     for (let i = 0; i < tier; i++) playTone(notes[i], i * 0.07, 0.16, 'triangle', 0.1);
-  } catch (_) { /* audio blocked, ignore */ }
+  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------
-// Toasts - the small pill that pops in from the top for streak/answer
-// feedback and for the meaning-hint warning. Reused for both so there's
-// one visual language for "something just happened" across the app.
+// Toasts
 // ---------------------------------------------------------------------
 let toastTimeout = null;
 function showToast(text, variant = 'jade') {
@@ -94,7 +78,7 @@ function showToast(text, variant = 'jade') {
   clearTimeout(toastTimeout);
   el.textContent = text;
   el.classList.remove('show', 'toast-jade', 'toast-warn', 'toast-big');
-  void el.offsetWidth; // restart the animation even if it's already showing
+  void el.offsetWidth;
   el.classList.add('show', variant === 'warn' ? 'toast-warn' : 'toast-jade');
   toastTimeout = setTimeout(() => el.classList.remove('show'), 1700);
 }
@@ -119,15 +103,12 @@ function go(hash) {
   const before = window.location.hash;
   window.location.hash = hash;
   if (window.location.hash === before) {
-    // The hash string didn't actually change (e.g. logging in while
-    // already sitting on #teacher), so the browser won't fire
-    // hashchange and render() would never run on its own. Force it.
     render();
   }
 }
 
 // ---------------------------------------------------------------------
-// Theme switcher - 4 cozy palettes, remembered per browser
+// Theme switcher
 // ---------------------------------------------------------------------
 
 const THEMES = [
@@ -292,12 +273,6 @@ function renderLanding() {
   initScrollReveal();
 }
 
-// Fades/slides each .reveal element in the first time it crosses into
-// view, with a small stagger between elements in the same row so a
-// grid of cards doesn't all pop in at once. Elements already on
-// screen at load (usually just the hero) still get the animation -
-// IntersectionObserver fires for anything already intersecting as
-// soon as it's observed, not only on future scroll events.
 function initScrollReveal() {
   if (window.__revealObserver) window.__revealObserver.disconnect();
   const groups = {};
@@ -327,12 +302,7 @@ function initScrollReveal() {
 }
 
 // ---------------------------------------------------------------------
-// Teacher: login
-// ---------------------------------------------------------------------
-
-// ---------------------------------------------------------------------
-// Auth - a single shared teacher passcode, same as the original
-// version of this app. Students never authenticate at all.
+// Teacher: Auth & Dashboard
 // ---------------------------------------------------------------------
 
 function isTeacherLoggedIn() {
@@ -375,10 +345,6 @@ function renderTeacherLogin() {
   });
 }
 
-// ---------------------------------------------------------------------
-// Teacher: dashboard
-// ---------------------------------------------------------------------
-
 function renderTeacherTopActions() {
   topActionsEl().insertAdjacentHTML('beforeend', `
     <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
@@ -403,14 +369,20 @@ async function renderTeacherDashboard() {
   const listHtml = quizzes.length ? quizzes.map((q) => `
     <div class="list-card" onclick="go('teacher/quiz/${q.id}')">
       <div>
-        <div class="list-card-title">${escapeHtml(q.title)}</div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="list-card-title">${escapeHtml(q.title)}</div>
+          <button class="btn btn-ghost btn-sm" title="Edit Title" onclick="event.stopPropagation(); editQuizTitle('${q.id}', '${escapeHtml(q.title)}')">${icon('paper', 12)} Edit Title</button>
+        </div>
         <div class="list-card-meta">
           <span>${icon('paper', 14)} ${q.questionCount} questions</span>
           <span>${icon('users', 14)} ${q.attemptCount} responses</span>
           <span>${icon('clock', 14)} ${formatDate(q.createdAt)}</span>
         </div>
       </div>
-      <span class="badge">${icon('key', 13)} ${q.code}</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="badge">${icon('key', 13)} ${q.code}</span>
+        <button class="btn btn-danger btn-sm" title="Delete Quiz" onclick="event.stopPropagation(); deleteQuiz('${q.id}')">${icon('trash')}</button>
+      </div>
     </div>
   `).join('') : `
     <div class="empty-state">
@@ -429,8 +401,21 @@ async function renderTeacherDashboard() {
   `;
 }
 
+// Edit quiz title helper function
+async function editQuizTitle(quizId, currentTitle) {
+  const newTitle = prompt("Enter new title for this quiz:", currentTitle);
+  if (newTitle && newTitle.trim() !== "" && newTitle.trim() !== currentTitle) {
+    try {
+      await Api.updateQuizTitle(quizId, newTitle.trim());
+      render();
+    } catch (err) {
+      alert("Failed to update title: " + err.message);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------
-// Teacher: new quiz (prompt template + paste JSON)
+// Teacher: new quiz
 // ---------------------------------------------------------------------
 
 function renderTeacherNewQuiz() {
@@ -515,7 +500,7 @@ function renderTeacherNewQuiz() {
     try {
       parsed = JSON.parse(document.getElementById('quiz-json').value);
     } catch (err) {
-      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option (often from an English aside in parentheses) - that breaks the format. Ask the chatbot to redo it without any straight double quotes inside the text, or remove the stray one by hand.';
+      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option - that breaks the format.';
       return;
     }
     try {
@@ -562,7 +547,10 @@ async function renderTeacherResults(quizId) {
 
     <div class="row-between" style="align-items:flex-start;">
       <div>
-        <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
+          <button class="btn btn-ghost btn-sm" onclick="editQuizTitle('${quiz.id}', '${escapeHtml(quiz.title)}')">${icon('paper', 12)} Edit Title</button>
+        </div>
         <p style="margin:0;">${escapeHtml(quiz.description || '')}</p>
       </div>
       <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
@@ -591,7 +579,7 @@ async function renderTeacherResults(quizId) {
     <div class="field" style="max-width:260px; margin-bottom:24px;">
       <label>Total time limit for the whole quiz (seconds)</label>
       <input class="input" type="number" min="0" step="1" id="time-limit-input" value="${quiz.timeLimitSeconds || 0}" placeholder="0 = off" />
-      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. One countdown for the entire quiz, not per question. A correct answer's XP score gets up to +50% for answering early, plus a streak bonus for consecutive correct answers - accuracy score (the gradebook number) is never affected.</p>
+      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off.</p>
     </div>
 
     <div class="section-title">${icon('users', 14)} ${attempts.length} response${attempts.length === 1 ? '' : 's'}</div>
@@ -694,7 +682,7 @@ function copyText(text, btn) {
 }
 
 // ---------------------------------------------------------------------
-// Student: join
+// Student: join & quiz
 // ---------------------------------------------------------------------
 
 function getQueryParam(name) {
@@ -756,9 +744,16 @@ function renderStudentJoin() {
   });
 }
 
-// ---------------------------------------------------------------------
-// Student: taking the quiz (one question at a time)
-// ---------------------------------------------------------------------
+function studentSurrender() {
+  if (confirm("Are you sure you want to surrender? Your progress will be cancelled.")) {
+    clearQuizTimer();
+    state.studentAttemptId = null;
+    state.studentQuiz = null;
+    state.studentAnswers = {};
+    state.studentQuestionIndex = 0;
+    go('student/join');
+  }
+}
 
 function renderStudentQuiz() {
   if (!state.studentQuiz) return go('student/join');
@@ -790,7 +785,7 @@ function renderStudentQuiz() {
 
     ${timeLimitSeconds > 0 ? `
       <div class="timer-row">
-        <span>${icon('clock', 14)} One timer for the whole quiz - answer quickly for a bigger bonus</span>
+        <span>${icon('clock', 14)} One timer for the whole quiz</span>
         <span id="timer-value">${timeLimitSeconds}s</span>
       </div>
       <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
@@ -803,8 +798,7 @@ function renderStudentQuiz() {
     <div class="question-block">
       <div class="row-between" style="margin-bottom: 2px;">
         <div class="question-index">Question ${i + 1} of ${total}</div>
-        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button" ${answered ? 'disabled' : ''}
-          title="${hintUsed ? 'Hint used - this question is worth half credit if correct' : answered ? 'Already answered - hint no longer available for this question' : 'Show a hint (halves credit for this question if correct)'}">
+        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button" ${answered ? 'disabled' : ''}>
           ${icon('lightbulb', 18)}
         </button>
       </div>
@@ -813,10 +807,13 @@ function renderStudentQuiz() {
       ${answerAreaHtml}
     </div>
     <div class="row-between">
-      <button class="btn btn-ghost" ${i === 0 ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
-      ${isLast
-        ? `<button class="btn btn-primary" onclick="studentSubmit()">${icon('check')} Submit quiz</button>`
-        : `<button class="btn btn-primary" onclick="studentNext()">Next ${icon('arrowRight')}</button>`}
+      <button class="btn btn-danger btn-sm" onclick="studentSurrender()">🏳️ Quit Quiz</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost" ${i === 0 ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
+        ${isLast
+          ? `<button class="btn btn-primary" onclick="studentSubmit()">${icon('check')} Submit quiz</button>`
+          : `<button class="btn btn-primary" onclick="studentNext()">Next ${icon('arrowRight')}</button>`}
+      </div>
     </div>
   `;
 
@@ -826,9 +823,9 @@ function renderStudentQuiz() {
   const hintBtn = document.getElementById('hint-lamp-btn');
   if (!answered) {
     hintBtn.addEventListener('click', () => {
-      if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
+      if (state.studentHintsUsed[q.id]) return;
       state.studentHintsUsed[q.id] = true;
-      showToast('Hint shown - this question now worth half credit', 'warn');
+      showToast('Hint shown - question now worth half credit', 'warn');
       renderStudentQuiz();
     });
   }
@@ -840,14 +837,14 @@ function renderMultipleChoiceArea(q, hintUsed) {
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const showOptionMeanings = hintUsed && !!q.optionMeanings;
-  const locked = !!currentAnswer; // one answer per question - see bindMultipleChoiceEvents
+  const locked = !!currentAnswer;
 
   const optionsHtml = q.options.map((opt, idx) => {
     let feedbackClass = '';
     if (currentAnswer && currentValue === opt) {
       feedbackClass = currentAnswer.correct === true ? 'answered-correct'
         : currentAnswer.correct === false ? 'answered-incorrect'
-        : 'checking'; // optimistic state while waiting on the correctness check
+        : 'checking';
     }
     return `
     <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass} ${locked ? 'locked' : ''}" data-option-index="${idx}">
@@ -863,14 +860,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
 }
 
 function bindMultipleChoiceEvents(q) {
-  // Once a question has an answer, it's locked - no re-clicking a
-  // different option to keep trying until the correct one lights up.
-  // One tap, one answer, same as a real quiz.
   if (state.studentAnswers[q.id]) return;
-
-  // Bound with addEventListener (not inline onclick) so option text -
-  // Hanzi, pinyin, quotes, anything - never has to survive being
-  // embedded inside an HTML attribute string.
   mainEl().querySelectorAll('.option').forEach((el) => {
     el.addEventListener('click', () => {
       const opt = q.options[Number(el.dataset.optionIndex)];
@@ -879,18 +869,12 @@ function bindMultipleChoiceEvents(q) {
   });
 }
 
-// Tap-to-build sentence area: word chunks start in a shuffled "pool";
-// tapping one moves it into the "assembled" row in the order tapped.
-// Tapping an assembled chunk sends it back to the pool. This is the
-// same interaction Duolingo-style sentence-building exercises use on
-// touch devices instead of true drag-and-drop, which is unreliable on
-// phones without a drag library - tapping works everywhere.
 function renderReorderArea(q) {
   const finalized = state.studentAnswers[q.id];
   const placed = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
   const placedSet = new Set(placed);
   const pool = q.chunks.filter((c) => !placedSet.has(c.id));
-  const locked = !!finalized; // one arrangement per question, same rule as multiple choice
+  const locked = !!finalized;
 
   let assembledFeedbackClass = '';
   if (finalized) {
@@ -904,7 +888,7 @@ function renderReorderArea(q) {
   return `
     <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
       ${placed.length === 0
-        ? `<span class="reorder-placeholder">Tap the words below in order to build the sentence</span>`
+        ? `<span class="reorder-placeholder">Tap words in order to build sentence</span>`
         : placed.map((id) => chip(q.chunks.find((c) => c.id === id), 'assembled')).join('')}
     </div>
     <div class="reorder-pool" id="reorder-pool">
@@ -916,10 +900,6 @@ function renderReorderArea(q) {
 
 function bindReorderEvents(q) {
   const total = q.chunks.length;
-
-  // Once this question has a finalized answer, it's locked - no more
-  // pulling a chunk back out to peek-and-retry after seeing whether
-  // it was right. One arrangement, one check, same as multiple choice.
   if (state.studentAnswers[q.id]) return;
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
@@ -954,11 +934,6 @@ function bindReorderEvents(q) {
   }
 }
 
-// Ticks the visible countdown for the WHOLE quiz. Reads the fixed
-// studentQuizStartedAt stamped at join time rather than counting its
-// own elapsed time, so re-renders (selecting an option, moving
-// between questions, using a hint) never reset or double-count the
-// clock - it's the same clock from the first question to the last.
 function startQuizTimer(timeLimitSeconds, isLast) {
   const limitMs = timeLimitSeconds * 1000;
 
@@ -966,8 +941,6 @@ function startQuizTimer(timeLimitSeconds, isLast) {
     const valueEl = document.getElementById('timer-value');
     const fillEl = document.getElementById('timer-fill');
     if (!valueEl || !fillEl) {
-      // Navigated to a different route entirely - nothing left to
-      // update, stop ticking.
       clearQuizTimer();
       return;
     }
@@ -985,8 +958,6 @@ function startQuizTimer(timeLimitSeconds, isLast) {
   quizTimerInterval = setInterval(tick, 250);
 }
 
-// A short burst of emoji flying outward from an element - the
-// "cheerful explosion" for a correct answer.
 function explodeAt(el, emojis, count) {
   if (!el) return;
   const rect = el.getBoundingClientRect();
@@ -1012,8 +983,6 @@ function explodeAt(el, emojis, count) {
   setTimeout(() => container.remove(), 900);
 }
 
-// A single sad emoji that drops and fades - the gentler "aww" cue for
-// a wrong answer, paired with the low buzz tone.
 function sadPopAt(el) {
   if (!el) return;
   const rect = el.getBoundingClientRect();
@@ -1030,11 +999,7 @@ async function selectAnswer(questionId, value) {
   const answeredAtMs = Date.now() - state.studentQuizStartedAt;
   const hintUsed = !!state.studentHintsUsed[questionId];
 
-  // Optimistic local update so the option highlights and pulses
-  // ("checking...") right away, instead of sitting still until the
-  // network round trip finishes - the correct/incorrect payoff still
-  // waits on the server (it holds the answer key, the client never
-  // does), but the wait itself now visibly acknowledges the tap.
+  // Optimistic answer state update for immediate UI feedback
   state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null };
   renderStudentQuiz();
 
@@ -1042,10 +1007,8 @@ async function selectAnswer(questionId, value) {
   try {
     const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, hintUsed, answeredAtMs);
     correct = res.correct;
-  } catch (err) {
-    // Network hiccup - the answer is still recorded locally and still
-    // counts at final submit, it just won't animate right now.
-  }
+  } catch (err) {}
+  
   state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct };
 
   if (correct === true) {
@@ -1063,8 +1026,6 @@ async function selectAnswer(questionId, value) {
     playIncorrectSound();
   }
 
-  // Only re-render + fire the effect if the student is still looking
-  // at this question - they may have already clicked Next.
   if (state.studentQuiz.questions[state.studentQuestionIndex].id === questionId) {
     renderStudentQuiz();
     const q = state.studentQuiz.questions.find((qq) => qq.id === questionId);
@@ -1122,17 +1083,11 @@ function renderStudentDone() {
       </div>
 
       <h2>Quiz submitted</h2>
-      <p>
-        Your teacher can see your result now.
-        ${result.longestStreak >= 3 ? ` Best streak: ${result.longestStreak} in a row.` : ''}
-        ${result.meaningUsedCount ? ` Hint was used on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
-      </p>
+      <p>Your teacher can see your result now.</p>
       <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
     </div>
   `;
 
-  // A little fanfare when the title lands - bigger sting for the top
-  // title (a genuinely flawless run) than an ordinary finish.
   if (isTopTitle) playStreakSound(10);
   else playCorrectSound();
 }
