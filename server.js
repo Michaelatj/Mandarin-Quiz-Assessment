@@ -270,7 +270,15 @@ app.get('/api/quizzes/:id/results', requireTeacher, async (req, res) => {
   const quiz = await db.getQuizById(req.params.id);
   if (!quiz) return res.status(404).json({ error: 'Quiz not found.' });
   const attempts = await db.listAttemptsByQuiz(quiz.id);
-  res.json({ quiz, attempts });
+  // Recomputed fresh from the stored score, not read back from the
+  // plain string saved at submit time - so renaming a tier in
+  // titles.js updates how every past attempt displays too.
+  const withTitles = attempts.map((a) => (
+    a.submittedAt
+      ? { ...a, title: computeTitle(a.accuracyScore, a.longestStreak, quiz.questions.length) }
+      : a
+  ));
+  res.json({ quiz, attempts: withTitles });
 });
 
 // ---------------------------------------------------------------------
@@ -290,6 +298,9 @@ app.post('/api/join/:code', async (req, res) => {
 
   const quiz = await db.findQuizByCode(req.params.code);
   if (!quiz) return res.status(404).json({ error: 'No quiz found for that code.' });
+  if (!quiz.questions || quiz.questions.length === 0) {
+    return res.status(409).json({ error: 'This quiz has no questions - ask your teacher to check it or create it again.' });
+  }
 
   if (quiz.allowRetakes === false) {
     const alreadyDone = await db.hasCompletedAttempt(quiz.id, name);
@@ -419,7 +430,7 @@ app.post('/api/attempts/:attemptId/submit', async (req, res) => {
 
   const scored = recomputeScore(mergedAnswers, mergedOrder, quiz);
   const title = computeTitle(scored.accuracyScore, scored.longestStreak, quiz.questions.length);
-  await db.finalizeAttempt(attempt.id, mergedAnswers, mergedOrder, scored, title);
+  await db.finalizeAttempt(attempt.id, mergedAnswers, mergedOrder, scored, title.name);
 
   const meaningUsedCount = Object.values(answers).filter((a) => a && typeof a === 'object' && a.usedMeaning).length;
   res.json({

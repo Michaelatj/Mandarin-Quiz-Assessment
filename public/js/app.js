@@ -628,7 +628,7 @@ function renderAttemptRow(quiz, attempt) {
       <div style="display:flex; align-items:center; gap:16px; width:100%;">
         ${seal}
         <div class="attempt-info">
-          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.title)}</span>` : ''}</div>
+          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon(attempt.title.icon, 11)} ${escapeHtml(attempt.title.name)} (${escapeHtml(attempt.title.pinyin)})</span>` : ''}</div>
           <div class="attempt-meta">
             ${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}
             ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
@@ -762,6 +762,15 @@ function renderStudentJoin() {
 
 function renderStudentQuiz() {
   if (!state.studentQuiz) return go('student/join');
+  if (!state.studentQuiz.questions || state.studentQuiz.questions.length === 0) {
+    mainEl().innerHTML = `
+      <div class="empty-state">
+        <p>This quiz has no questions - ask your teacher to check it.</p>
+        <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      </div>
+    `;
+    return;
+  }
   clearQuizTimer();
 
   const quiz = state.studentQuiz;
@@ -772,6 +781,7 @@ function renderStudentQuiz() {
   const hintUsed = !!state.studentHintsUsed[q.id];
   const showMeaning = hintUsed && !!q.questionMeaning;
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
+  const answered = !!state.studentAnswers[q.id];
 
   const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
 
@@ -793,8 +803,8 @@ function renderStudentQuiz() {
     <div class="question-block">
       <div class="row-between" style="margin-bottom: 2px;">
         <div class="question-index">Question ${i + 1} of ${total}</div>
-        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button"
-          title="${hintUsed ? 'Hint used - this question is worth half credit if correct' : 'Show a hint (halves credit for this question if correct)'}">
+        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button" ${answered ? 'disabled' : ''}
+          title="${hintUsed ? 'Hint used - this question is worth half credit if correct' : answered ? 'Already answered - hint no longer available for this question' : 'Show a hint (halves credit for this question if correct)'}">
           ${icon('lightbulb', 18)}
         </button>
       </div>
@@ -813,12 +823,15 @@ function renderStudentQuiz() {
   if (q.type === 'sentence_reorder') bindReorderEvents(q);
   else bindMultipleChoiceEvents(q);
 
-  document.getElementById('hint-lamp-btn').addEventListener('click', () => {
-    if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
-    state.studentHintsUsed[q.id] = true;
-    showToast('Hint shown - this question now worth half credit', 'warn');
-    renderStudentQuiz();
-  });
+  const hintBtn = document.getElementById('hint-lamp-btn');
+  if (!answered) {
+    hintBtn.addEventListener('click', () => {
+      if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
+      state.studentHintsUsed[q.id] = true;
+      showToast('Hint shown - this question now worth half credit', 'warn');
+      renderStudentQuiz();
+    });
+  }
 
   if (timeLimitSeconds > 0) startQuizTimer(timeLimitSeconds, isLast);
 }
@@ -827,6 +840,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const showOptionMeanings = hintUsed && !!q.optionMeanings;
+  const locked = !!currentAnswer; // one answer per question - see bindMultipleChoiceEvents
 
   const optionsHtml = q.options.map((opt, idx) => {
     let feedbackClass = '';
@@ -836,7 +850,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
         : 'checking'; // optimistic state while waiting on the correctness check
     }
     return `
-    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass} ${locked ? 'locked' : ''}" data-option-index="${idx}">
       <span class="option-marker"></span>
       <span>
         <span>${escapeHtml(opt)}</span>
@@ -849,6 +863,11 @@ function renderMultipleChoiceArea(q, hintUsed) {
 }
 
 function bindMultipleChoiceEvents(q) {
+  // Once a question has an answer, it's locked - no re-clicking a
+  // different option to keep trying until the correct one lights up.
+  // One tap, one answer, same as a real quiz.
+  if (state.studentAnswers[q.id]) return;
+
   // Bound with addEventListener (not inline onclick) so option text -
   // Hanzi, pinyin, quotes, anything - never has to survive being
   // embedded inside an HTML attribute string.
@@ -871,6 +890,7 @@ function renderReorderArea(q) {
   const placed = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
   const placedSet = new Set(placed);
   const pool = q.chunks.filter((c) => !placedSet.has(c.id));
+  const locked = !!finalized; // one arrangement per question, same rule as multiple choice
 
   let assembledFeedbackClass = '';
   if (finalized) {
@@ -879,7 +899,7 @@ function renderReorderArea(q) {
       : 'checking';
   }
 
-  const chip = (chunk, kind) => `<div class="reorder-chip" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
+  const chip = (chunk, kind) => `<div class="reorder-chip ${locked ? 'locked' : ''}" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
 
   return `
     <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
@@ -890,12 +910,17 @@ function renderReorderArea(q) {
     <div class="reorder-pool" id="reorder-pool">
       ${pool.map((c) => chip(c, 'pool')).join('')}
     </div>
-    ${placed.length > 0 ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
+    ${placed.length > 0 && !locked ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
   `;
 }
 
 function bindReorderEvents(q) {
   const total = q.chunks.length;
+
+  // Once this question has a finalized answer, it's locked - no more
+  // pulling a chunk back out to peek-and-retry after seeing whether
+  // it was right. One arrangement, one check, same as multiple choice.
+  if (state.studentAnswers[q.id]) return;
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
     el.addEventListener('click', () => {
@@ -914,14 +939,8 @@ function bindReorderEvents(q) {
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
-      // If this question was already finalized, tapping a chunk to
-      // remove it un-finalizes the answer so the student can fix the
-      // order and re-submit, same "change your mind" freedom the
-      // multiple-choice options already allow.
-      const finalized = state.studentAnswers[q.id];
-      const currentlyPlaced = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
-      if (finalized) delete state.studentAnswers[q.id];
-      state.studentReorderProgress[q.id] = currentlyPlaced.filter((x) => x !== id);
+      const placed = state.studentReorderProgress[q.id] || [];
+      state.studentReorderProgress[q.id] = placed.filter((x) => x !== id);
       renderStudentQuiz();
     });
   });
@@ -930,7 +949,6 @@ function bindReorderEvents(q) {
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
       delete state.studentReorderProgress[q.id];
-      delete state.studentAnswers[q.id];
       renderStudentQuiz();
     });
   }
@@ -1084,7 +1102,9 @@ function renderStudentDone() {
     <div style="text-align:center; padding-top: 30px;">
       <div class="title-reveal ${isTopTitle ? 'title-reveal-top' : ''}">
         <div class="title-reveal-label">You are</div>
-        <div class="title-reveal-name">${escapeHtml(result.title)}</div>
+        <div class="title-reveal-icon">${icon(result.title.icon, 34)}</div>
+        <div class="title-reveal-name">${escapeHtml(result.title.name)} <span class="title-reveal-pinyin">(${escapeHtml(result.title.pinyin)})</span></div>
+        <div class="title-reveal-meaning">${escapeHtml(result.title.meaning)}</div>
       </div>
 
       <div class="score-pair" style="margin:22px 0 20px;">
@@ -1105,7 +1125,7 @@ function renderStudentDone() {
       <p>
         Your teacher can see your result now.
         ${result.longestStreak >= 3 ? ` Best streak: ${result.longestStreak} in a row.` : ''}
-        ${result.meaningUsedCount ? ` Meaning was shown on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
+        ${result.meaningUsedCount ? ` Hint was used on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
       </p>
       <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
     </div>

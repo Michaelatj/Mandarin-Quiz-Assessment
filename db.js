@@ -123,7 +123,19 @@ async function createQuiz(quiz) {
     answer: q.type === 'sentence_reorder' ? null : q.answer,
     points: q.points,
   }));
-  unwrap(await supabase.from('questions').insert(questionRows));
+
+  // These are two separate inserts, not one transaction - if the
+  // second one fails, the quiz row from the first would otherwise be
+  // left behind with a working join code and zero questions, which
+  // crashes the student page rather than failing loudly at creation
+  // time. Clean up on any failure here instead of leaving that ghost
+  // quiz around.
+  try {
+    unwrap(await supabase.from('questions').insert(questionRows));
+  } catch (err) {
+    await supabase.from('quizzes').delete().eq('id', quiz.id);
+    throw err;
+  }
   return getQuizById(quiz.id);
 }
 
