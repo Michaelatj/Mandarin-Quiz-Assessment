@@ -704,351 +704,6 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 
 /* ===========================================================
    Quiz-taking
-===============id {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-  margin: 40px 0 56px;
-}
-.use-case-card {
-  padding: 22px 18px;
-  border: var(--card-border-width) var(--card-border-style) var(--border);
-  border-radius: var(--radius);
-  text-align: left;
-  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease;
-}
-.use-case-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--shadow);
-  border-color: var(--accent);
-}
-.use-case-card .step {
-  font-family: var(--font-display);
-  font-size: 13px;
-  color: var(--accent);
-  margin-bottom: 8px;
-}
-.use-case-card h4 { margin-bottom: 6px; font-size: 15.5px; }
-.use-case-card p { font-size: 13px; margin: 0; }
-
-@media (max-width: 640px) {
-  .use-case-grid { grid-template-columns: 1fr; }
-  .nav-menu { gap: 18px; }
-  .hero h1 { font-size: 28px; }
-}
-
-/* ===========================================================
-   Buttons
-=========================================================== */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 20px;
-  border-radius: var(--radius-btn);
-  border: 1px solid transparent;
-  background: var(--surface-alt);
-  color: var(--text);
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 14px;
-  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, border-radius 0.2s ease;
-}
-.btn:hover { background: var(--surface-hover); }
-.btn:active { transform: scale(0.98); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-primary {
-  background: var(--accent);
-  color: #fbf1e6;
-}
-.btn-primary:hover { background: var(--accent-hover); }
-
-.btn-ghost {
-  background: transparent;
-  border-color: var(--border);
-}
-.btn-ghost:hover { border-color: var(--text-faint); }
-
-.btn-danger {
-  background: transparent;
-  border-color: var(--border);
-  color: var(--accent);
-}
-.btn-danger:hover { border-color: var(--accent); background: var(--accent-soft); }
-
-.btn-sm { padding: 7px 14px; font-size: 13px; }
-.btn-block { width: 100%; justify-content: center; }
-
-/* ===========================================================
-   Form elements
-=========================================================== */
-.field { margin-bottom: 18px; }
-.field label {
-  display: block;
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 7px;
-  letter-spacing: 0.01em;
-}
-
-.input, textarea.input {
-  width: 100%;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  color: var(--text);
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-.input:focus { border-color: var(--accent); }
-.input::placeholder { color: var(--text-faint); }
-
-textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mono); font-size: 13px; line-height: 1.55; }
-
-.input-code {
-  font-family: var(--font-mono);
-  letter-spacing: 0.35em;
-  text-align: center;
-  font-size: 22px;
-  padding: 14px;
-}
-
-/* ===========================================================
-   Cards
-=========================================================== */
-.card {
-  background: var(--surface);
-  border: var(--card-border-width) var(--card-border-style) var(--border);
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-bottom: 16px;
-}
-
-.card-quiet {
-  background: transparent;
-  border: 1px dashed var(--border);
-}
-
-.list-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  background: var(--surface);
-  border: var(--card-border-width) var(--card-border-style) var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  margin-bottom: 12px;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-.list-card:hover { border-color: var(--text-faint); }
-
-.list-card-title { font-family: var(--font-display); font-size: 16px; margin-bottom: 4px; }
-.list-card-meta { font-size: 12.5px; color: var(--text-faint); display: flex; gap: 14px; }
-
-/* ===========================================================
-   Choice landing (Teacher / Student)
-=========================================================== */
-.choice-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-top: 28px;
-}
-@media (max-width: 560px) {
-  .choice-grid { grid-template-columns: 1fr; }
-}
-
-.choice-card {
-  background: var(--surface);
-  border: var(--card-border-width) var(--card-border-style) var(--border);
-  border-radius: var(--radius-lg);
-  padding: 30px 22px;
-  text-align: center;
-  cursor: pointer;
-  transition: border-color 0.25s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 0.25s ease;
-}
-.choice-card:hover { border-color: var(--accent); transform: translateY(-4px); box-shadow: var(--shadow); }
-.choice-card .icon { color: var(--accent); margin-bottom: 14px; }
-.choice-card h3 { margin-bottom: 6px; }
-.choice-card p { font-size: 13.5px; margin: 0; }
-
-/* ===========================================================
-   Icons - simple stroke-based SVGs, no emoji
-=========================================================== */
-.icon { display: inline-flex; }
-.icon svg { display: block; }
-
-/* ===========================================================
-   Seal stamp - the signature element, used on scores/results
-=========================================================== */
-.seal {
-  width: 74px;
-  height: 74px;
-  border-radius: var(--seal-radius);
-  border: 2.5px var(--seal-border-style) var(--accent);
-  box-shadow: var(--seal-glow);
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  transform: rotate(-4deg);
-  flex-shrink: 0;
-  font-family: var(--font-display);
-  transition: border-radius 0.2s ease;
-}
-.seal.jade { border-color: var(--jade); color: var(--jade); }
-.seal .seal-score { font-size: 20px; font-weight: 700; line-height: 1; }
-.seal .seal-total { font-size: 10px; color: var(--text-faint); margin-top: 2px; }
-
-/* ===========================================================
-   Streak feedback - fires briefly whenever an answer is marked
-   right, escalating at 3/5/10 in a row. Pure CSS/JS, no
-   backend round trip beyond the immediate correctness check.
-=========================================================== */
-.streak-banner {
-  position: fixed;
-  top: 22px;
-  left: 50%;
-  transform: translateX(-50%) translateY(-14px);
-  background: var(--jade);
-  color: #0f1512;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 14px;
-  padding: 10px 20px;
-  border-radius: var(--radius-btn);
-  box-shadow: var(--shadow);
-  opacity: 0;
-  pointer-events: none;
-  z-index: 50;
-  transition: opacity 0.22s ease, transform 0.22s ease;
-}
-.streak-banner.toast-warn { background: var(--accent); color: #fbf1e6; }
-.streak-banner.show {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-  animation: streak-pop 0.4s ease;
-}
-@keyframes streak-pop {
-  0% { transform: translateX(-50%) translateY(0) scale(0.85); }
-  50% { transform: translateX(-50%) translateY(0) scale(1.08); }
-  100% { transform: translateX(-50%) translateY(0) scale(1); }
-}
-
-.option.answered-correct {
-  border-color: var(--jade);
-  background: var(--jade-soft);
-  animation: correct-flash 0.5s ease;
-}
-.option.answered-incorrect {
-  border-color: var(--accent);
-  animation: shake 0.4s ease;
-}
-@keyframes correct-flash {
-  0% { box-shadow: 0 0 0 0 var(--jade-soft); }
-  100% { box-shadow: 0 0 0 8px transparent; }
-}
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  25% { transform: translateX(-4px); }
-  75% { transform: translateX(4px); }
-}
-
-.streak-track {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-bottom: 14px;
-}
-.streak-flame { color: var(--accent); }
-
-/* Dual score - accuracy (gradebook) vs XP (game) */
-.score-pair { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; }
-.score-block { text-align: center; }
-.score-block .score-label {
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  margin-top: 8px;
-}
-.xp-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-radius: var(--radius-btn);
-  padding: 6px 14px;
-  font-weight: 700;
-  font-size: 13px;
-}
-
-/* ===========================================================
-   Title reveal - the big "You are: ___" moment at the end of a
-   quiz. A bigger, gold-tinted version plays for a genuinely
-   flawless run (100% accuracy AND a streak that covered every
-   question) versus an ordinary finish.
-=========================================================== */
-.title-reveal {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  animation: title-drop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.3);
-}
-.title-reveal-label {
-  font-size: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.title-reveal-icon {
-  color: var(--accent);
-  margin-bottom: 2px;
-}
-.title-reveal-top .title-reveal-icon { color: var(--jade); }
-.title-reveal-name {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 28px;
-  color: var(--accent);
-}
-.title-reveal-pinyin {
-  font-size: 16px;
-  font-weight: 400;
-  color: var(--text-faint);
-  font-family: var(--font-body);
-}
-.title-reveal-meaning {
-  font-size: 13.5px;
-  color: var(--text-faint);
-  margin-top: 2px;
-}
-.title-reveal-top .title-reveal-name {
-  font-size: 34px;
-  color: var(--jade);
-  animation: title-glow 1.4s ease-in-out infinite alternate;
-}
-@keyframes title-drop {
-  0% { opacity: 0; transform: translateY(-18px) scale(0.9); }
-  60% { opacity: 1; transform: translateY(2px) scale(1.03); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
-}
-@keyframes title-glow {
-  from { text-shadow: 0 0 0 transparent; }
-  to { text-shadow: 0 0 18px var(--jade-soft); }
-}
-
-/* ===========================================================
-   Quiz-taking
 =========================================================== */
 .progress-track {
   height: 4px;
@@ -1435,6 +1090,96 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
   border: 1px solid rgba(255,255,255,0.15);
   flex-shrink: 0;
 }
+
+/* ===========================================================
+   Modal - a small centered dialog with a dimmed backdrop, used
+   for things like renaming a quiz. Click the backdrop or press
+   Escape to dismiss; Enter submits from the input.
+=========================================================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 5, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  padding: 20px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.modal-overlay.show { opacity: 1; }
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 28px 26px 24px;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+  transform: translateY(14px) scale(0.96);
+  opacity: 0;
+  transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.3), opacity 0.18s ease;
+}
+.modal-overlay.show .modal-card { transform: translateY(0) scale(1); opacity: 1; }
+.modal-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+}
+.modal-title { margin: 0 0 6px; font-family: var(--font-display); }
+.modal-subtitle { margin: 0 0 18px; font-size: 13px; color: var(--text-faint); }
+.modal-card .field { text-align: left; margin-bottom: 0; }
+.modal-card .input { text-align: center; font-size: 15px; }
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+.modal-actions .btn { flex: 1; justify-content: center; }
+
+/* ===========================================================
+   Question navigator - a row of tappable numbers above the quiz
+   progress bar so a student can jump straight to any question.
+=========================================================== */
+.qnav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 2px 8px;
+  margin-bottom: 14px;
+  scrollbar-width: thin;
+}
+.qnav::-webkit-scrollbar { height: 4px; }
+.qnav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.qnav-item {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.qnav-item:hover { border-color: var(--text-faint); transform: translateY(-1px); }
+.qnav-item.current { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.qnav-item.qnav-pending { border-color: var(--text-faint); background: var(--surface-alt); color: var(--text); }
+.qnav-item.qnav-correct { border-color: var(--jade); background: var(--jade-soft); color: var(--jade); }
+.qnav-item.qnav-incorrect { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.qnav-item.current.qnav-correct,
+.qnav-item.current.qnav-incorrect,
+.qnav-item.current.qnav-pending { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px currentColor; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
