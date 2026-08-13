@@ -371,7 +371,7 @@ async function renderTeacherDashboard() {
       <div>
         <div style="display:flex; align-items:center; gap:8px;">
           <div class="list-card-title">${escapeHtml(q.title)}</div>
-          <button class="btn btn-ghost btn-sm" title="Edit Title" onclick="event.stopPropagation(); editQuizTitle('${q.id}', '${escapeHtml(q.title)}')">${icon('paper', 12)} Edit Title</button>
+          <button class="btn btn-ghost btn-sm" title="Edit Title" data-quiz-id="${q.id}" data-quiz-title="${escapeHtml(q.title)}" onclick="event.stopPropagation(); editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
         </div>
         <div class="list-card-meta">
           <span>${icon('paper', 14)} ${q.questionCount} questions</span>
@@ -401,17 +401,90 @@ async function renderTeacherDashboard() {
   `;
 }
 
-// Edit quiz title helper function
-async function editQuizTitle(quizId, currentTitle) {
-  const newTitle = prompt("Enter new title for this quiz:", currentTitle);
-  if (newTitle && newTitle.trim() !== "" && newTitle.trim() !== currentTitle) {
-    try {
-      await Api.updateQuizTitle(quizId, newTitle.trim());
-      render();
-    } catch (err) {
-      alert("Failed to update title: " + err.message);
-    }
-  }
+// ---------------------------------------------------------------------
+// Modal - small centered dialog with a dimmed backdrop. Click the
+// backdrop or press Escape to dismiss.
+// ---------------------------------------------------------------------
+function modalEscHandler(e) {
+  if (e.key === 'Escape') closeModal();
+}
+
+function closeModal() {
+  const overlay = document.getElementById('modal-overlay');
+  document.removeEventListener('keydown', modalEscHandler);
+  if (!overlay) return;
+  overlay.classList.remove('show');
+  setTimeout(() => overlay.remove(), 160);
+}
+
+function openModal(innerHtml, { onMount } = {}) {
+  const prev = document.getElementById('modal-overlay');
+  if (prev) prev.remove();
+  document.removeEventListener('keydown', modalEscHandler);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-card">${innerHtml}</div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal();
+  });
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', modalEscHandler);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  if (onMount) onMount(overlay);
+}
+
+// Edit quiz title - opens a small modal with the current name
+// pre-filled and selected, ready to type over.
+function editQuizTitle(btn) {
+  const quizId = btn.dataset.quizId;
+  const currentTitle = btn.dataset.quizTitle;
+
+  openModal(`
+    <div class="modal-icon">${icon('paper', 20)}</div>
+    <h3 class="modal-title">Rename quiz</h3>
+    <p class="modal-subtitle">Students see this title when they join with the quiz code.</p>
+    <div class="field" style="margin-bottom: 4px;">
+      <input class="input" id="modal-title-input" maxlength="120" value="${escapeHtml(currentTitle)}" />
+    </div>
+    <div class="error-text" id="modal-title-error"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" id="modal-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" type="button" id="modal-save-btn">${icon('check', 14)} Save name</button>
+    </div>
+  `, {
+    onMount: (overlay) => {
+      const input = overlay.querySelector('#modal-title-input');
+      const errorEl = overlay.querySelector('#modal-title-error');
+      const saveBtn = overlay.querySelector('#modal-save-btn');
+      input.focus();
+      input.select();
+
+      const save = async () => {
+        const newTitle = input.value.trim();
+        errorEl.textContent = '';
+        if (!newTitle) { errorEl.textContent = "Quiz name can't be empty."; return; }
+        if (newTitle === currentTitle) { closeModal(); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          await Api.updateQuizTitle(quizId, newTitle);
+          closeModal();
+          render();
+        } catch (err) {
+          errorEl.textContent = err.message;
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = `${icon('check', 14)} Save name`;
+        }
+      };
+
+      overlay.querySelector('#modal-cancel-btn').addEventListener('click', closeModal);
+      saveBtn.addEventListener('click', save);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    },
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -549,7 +622,7 @@ async function renderTeacherResults(quizId) {
       <div>
         <div style="display:flex; align-items:center; gap:10px;">
           <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
-          <button class="btn btn-ghost btn-sm" onclick="editQuizTitle('${quiz.id}', '${escapeHtml(quiz.title)}')">${icon('paper', 12)} Edit Title</button>
+          <button class="btn btn-ghost btn-sm" data-quiz-id="${quiz.id}" data-quiz-title="${escapeHtml(quiz.title)}" onclick="editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
         </div>
         <p style="margin:0;">${escapeHtml(quiz.description || '')}</p>
       </div>
@@ -780,8 +853,35 @@ function renderStudentQuiz() {
 
   const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
 
+  // Two-step answering: picking an option only highlights it and can
+  // still be changed. The first press of the primary button checks it
+  // (revealing right/wrong) instead of moving on; only once it's been
+  // checked (or was left blank) does the same button advance.
+  const currentAnswer = state.studentAnswers[q.id];
+  const isChecking = !!(currentAnswer && currentAnswer.checking);
+  const hasUncheckedAnswer = !!currentAnswer && !currentAnswer.checked;
+  const primaryLabel = isChecking
+    ? 'Checking…'
+    : hasUncheckedAnswer
+      ? `Check answer ${icon('check')}`
+      : (isLast ? `${icon('check')} Submit quiz` : `Next ${icon('arrowRight')}`);
+  const primaryAction = 'studentCheckOrAdvance()';
+
+  const qnavHtml = `
+    <div class="qnav" id="qnav">
+      ${quiz.questions.map((qq, idx) => {
+        const a = state.studentAnswers[qq.id];
+        let statusClass = '';
+        if (a && a.checked) statusClass = a.correct === true ? 'qnav-correct' : 'qnav-incorrect';
+        else if (a) statusClass = 'qnav-pending';
+        return `<button type="button" class="qnav-item ${idx === i ? 'current' : ''} ${statusClass}" data-jump-index="${idx}" title="Question ${idx + 1}">${idx + 1}</button>`;
+      }).join('')}
+    </div>
+  `;
+
   mainEl().innerHTML = `
     <div class="progress-track"><div class="progress-fill" style="width:${((i + 1) / total) * 100}%"></div></div>
+    ${qnavHtml}
 
     ${timeLimitSeconds > 0 ? `
       <div class="timer-row">
@@ -809,13 +909,18 @@ function renderStudentQuiz() {
     <div class="row-between">
       <button class="btn btn-danger btn-sm" onclick="studentSurrender()">🏳️ Quit Quiz</button>
       <div style="display:flex; gap:8px;">
-        <button class="btn btn-ghost" ${i === 0 ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
-        ${isLast
-          ? `<button class="btn btn-primary" onclick="studentSubmit()">${icon('check')} Submit quiz</button>`
-          : `<button class="btn btn-primary" onclick="studentNext()">Next ${icon('arrowRight')}</button>`}
+        <button class="btn btn-ghost" ${i === 0 || isChecking ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
+        <button class="btn btn-primary" ${isChecking ? 'disabled' : ''} onclick="${primaryAction}">${primaryLabel}</button>
       </div>
     </div>
   `;
+
+  mainEl().querySelectorAll('.qnav-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      state.studentQuestionIndex = Number(el.dataset.jumpIndex);
+      renderStudentQuiz();
+    });
+  });
 
   if (q.type === 'sentence_reorder') bindReorderEvents(q);
   else bindMultipleChoiceEvents(q);
@@ -837,17 +942,20 @@ function renderMultipleChoiceArea(q, hintUsed) {
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const showOptionMeanings = hintUsed && !!q.optionMeanings;
-  const locked = !!currentAnswer;
+  // "locked" only kicks in once the answer has actually been checked -
+  // before that, the student can freely tap a different option.
+  const checked = !!(currentAnswer && currentAnswer.checked);
+  const checking = !!(currentAnswer && currentAnswer.checking);
 
   const optionsHtml = q.options.map((opt, idx) => {
     let feedbackClass = '';
-    if (currentAnswer && currentValue === opt) {
-      feedbackClass = currentAnswer.correct === true ? 'answered-correct'
-        : currentAnswer.correct === false ? 'answered-incorrect'
-        : 'checking';
+    if (checked && currentValue === opt) {
+      feedbackClass = currentAnswer.correct === true ? 'answered-correct' : 'answered-incorrect';
+    } else if (checking && currentValue === opt) {
+      feedbackClass = 'checking';
     }
     return `
-    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass} ${locked ? 'locked' : ''}" data-option-index="${idx}">
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass} ${checked || checking ? 'locked' : ''}" data-option-index="${idx}">
       <span class="option-marker"></span>
       <span>
         <span>${escapeHtml(opt)}</span>
@@ -860,30 +968,42 @@ function renderMultipleChoiceArea(q, hintUsed) {
 }
 
 function bindMultipleChoiceEvents(q) {
-  if (state.studentAnswers[q.id]) return;
+  const currentAnswer = state.studentAnswers[q.id];
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
   mainEl().querySelectorAll('.option').forEach((el) => {
     el.addEventListener('click', () => {
       const opt = q.options[Number(el.dataset.optionIndex)];
-      selectAnswer(q.id, opt);
+      selectOption(q.id, opt);
     });
   });
 }
 
+// Picking an option just records it as the pending choice - no server
+// round trip, no lock. The student can tap a different option as many
+// times as they like until they press "Check answer".
+function selectOption(questionId, value) {
+  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+  const hintUsed = !!state.studentHintsUsed[questionId];
+  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
+  renderStudentQuiz();
+}
+
 function renderReorderArea(q) {
-  const finalized = state.studentAnswers[q.id];
-  const placed = finalized ? finalized.value : (state.studentReorderProgress[q.id] || []);
+  const currentAnswer = state.studentAnswers[q.id];
+  const checked = !!(currentAnswer && currentAnswer.checked);
+  const checking = !!(currentAnswer && currentAnswer.checking);
+  const placed = currentAnswer ? currentAnswer.value : (state.studentReorderProgress[q.id] || []);
   const placedSet = new Set(placed);
   const pool = q.chunks.filter((c) => !placedSet.has(c.id));
-  const locked = !!finalized;
 
   let assembledFeedbackClass = '';
-  if (finalized) {
-    assembledFeedbackClass = finalized.correct === true ? 'answered-correct'
-      : finalized.correct === false ? 'answered-incorrect'
-      : 'checking';
+  if (checked) {
+    assembledFeedbackClass = currentAnswer.correct === true ? 'answered-correct' : 'answered-incorrect';
+  } else if (checking) {
+    assembledFeedbackClass = 'checking';
   }
 
-  const chip = (chunk, kind) => `<div class="reorder-chip ${locked ? 'locked' : ''}" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
+  const chip = (chunk, kind) => `<div class="reorder-chip ${checked || checking ? 'locked' : ''}" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
 
   return `
     <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
@@ -894,33 +1014,42 @@ function renderReorderArea(q) {
     <div class="reorder-pool" id="reorder-pool">
       ${pool.map((c) => chip(c, 'pool')).join('')}
     </div>
-    ${placed.length > 0 && !locked ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
+    ${placed.length > 0 && !checked && !checking ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
   `;
 }
 
 function bindReorderEvents(q) {
   const total = q.chunks.length;
-  if (state.studentAnswers[q.id]) return;
+  const currentAnswer = state.studentAnswers[q.id];
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
       const placed = [...(state.studentReorderProgress[q.id] || []), id];
       if (placed.length === total) {
+        // Fully assembled - becomes the pending answer, not checked yet.
+        // The student can still hit Clear to rebuild it before checking.
         delete state.studentReorderProgress[q.id];
-        selectAnswer(q.id, placed);
+        const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+        const hintUsed = !!state.studentHintsUsed[q.id];
+        state.studentAnswers[q.id] = { value: placed, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
       } else {
         state.studentReorderProgress[q.id] = placed;
-        renderStudentQuiz();
       }
+      renderStudentQuiz();
     });
   });
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
-      const placed = state.studentReorderProgress[q.id] || [];
-      state.studentReorderProgress[q.id] = placed.filter((x) => x !== id);
+      // If this was already the (unchecked) pending answer, tapping a
+      // chip pulls it back out into the pool instead of clearing everything.
+      const placed = (currentAnswer && !currentAnswer.checked ? currentAnswer.value : state.studentReorderProgress[q.id]) || [];
+      const next = placed.filter((x) => x !== id);
+      if (currentAnswer && !currentAnswer.checked) delete state.studentAnswers[q.id];
+      state.studentReorderProgress[q.id] = next;
       renderStudentQuiz();
     });
   });
@@ -929,6 +1058,7 @@ function bindReorderEvents(q) {
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
       delete state.studentReorderProgress[q.id];
+      delete state.studentAnswers[q.id];
       renderStudentQuiz();
     });
   }
@@ -995,21 +1125,26 @@ function sadPopAt(el) {
   setTimeout(() => span.remove(), 850);
 }
 
-async function selectAnswer(questionId, value) {
-  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
-  const hintUsed = !!state.studentHintsUsed[questionId];
+// Sends the pending answer to the server and reveals right/wrong on
+// screen. This only fires once the student has committed to an
+// answer by pressing "Check answer" - not the moment they tap an
+// option - so the correct/incorrect icon never appears early.
+async function confirmCurrentAnswer(questionId) {
+  const pending = state.studentAnswers[questionId];
+  if (!pending || pending.checked || pending.checking) return;
+  const { value, usedMeaning, answeredAtMs } = pending;
 
-  // Optimistic answer state update for immediate UI feedback
-  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null };
+  // Optimistic "checking" state so the UI can show a pulse while waiting.
+  state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct: null, checked: false, checking: true };
   renderStudentQuiz();
 
   let correct = null;
   try {
-    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, hintUsed, answeredAtMs);
+    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, usedMeaning, answeredAtMs);
     correct = res.correct;
   } catch (err) {}
-  
-  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct };
+
+  state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct, checked: true };
 
   if (correct === true) {
     state.studentStreak += 1;
@@ -1037,9 +1172,23 @@ async function selectAnswer(questionId, value) {
   }
 }
 
-function studentNext() {
-  state.studentQuestionIndex++;
-  renderStudentQuiz();
+// The single primary button on the quiz screen. First press on a
+// freshly-picked answer checks it; press it again (or press it with
+// nothing picked) and it moves on, submitting on the last question.
+async function studentCheckOrAdvance() {
+  const q = state.studentQuiz.questions[state.studentQuestionIndex];
+  const current = state.studentAnswers[q.id];
+  if (current && !current.checked) {
+    await confirmCurrentAnswer(q.id);
+    return;
+  }
+  const isLast = state.studentQuestionIndex === state.studentQuiz.questions.length - 1;
+  if (isLast) {
+    studentSubmit();
+  } else {
+    state.studentQuestionIndex++;
+    renderStudentQuiz();
+  }
 }
 
 function studentPrev() {
