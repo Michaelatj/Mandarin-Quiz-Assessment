@@ -525,495 +525,6 @@ function renderTeacherNewQuiz() {
             </span>
           </label>
         `).join('')}
-      <  }
-  if (audioCtx.state === 'suspended') audioCtx.resume();
-  return audioCtx;
-}
-
-function playTone(freq, startAt, durationSec, type = 'sine', peakGain = 0.12) {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(0, ctx.currentTime + startAt);
-  gain.gain.linearRampToValueAtTime(peakGain, ctx.currentTime + startAt + 0.015);
-  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + durationSec);
-  osc.connect(gain).connect(ctx.destination);
-  osc.start(ctx.currentTime + startAt);
-  osc.stop(ctx.currentTime + startAt + durationSec + 0.02);
-}
-
-function playCorrectSound() {
-  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) {}
-}
-function playIncorrectSound() {
-  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) {}
-}
-function playStreakSound(streak) {
-  try {
-    const notes = [660, 880, 1046, 1318, 1568];
-    const tier = streak >= 10 ? 5 : streak >= 5 ? 4 : 3;
-    for (let i = 0; i < tier; i++) playTone(notes[i], i * 0.07, 0.16, 'triangle', 0.1);
-  } catch (_) {}
-}
-
-// ---------------------------------------------------------------------
-// Toasts
-// ---------------------------------------------------------------------
-let toastTimeout = null;
-function showToast(text, variant = 'jade') {
-  const el = document.getElementById('streak-banner');
-  if (!el) return;
-  clearTimeout(toastTimeout);
-  el.textContent = text;
-  el.classList.remove('show', 'toast-jade', 'toast-warn', 'toast-big');
-  void el.offsetWidth;
-  el.classList.add('show', variant === 'warn' ? 'toast-warn' : 'toast-jade');
-  toastTimeout = setTimeout(() => el.classList.remove('show'), 1700);
-}
-
-const mainEl = () => document.getElementById('main');
-const topActionsEl = () => document.getElementById('topbar-actions');
-
-function escapeHtml(str) {
-  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
-function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ' +
-    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
-
-function go(hash) {
-  const before = window.location.hash;
-  window.location.hash = hash;
-  if (window.location.hash === before) {
-    render();
-  }
-}
-
-// ---------------------------------------------------------------------
-// Theme switcher
-// ---------------------------------------------------------------------
-
-const THEMES = [
-  { id: 'ricepaper', name: 'Rice Paper', swatch: '#8a5a35' },
-  { id: 'ink-seal', name: 'Ink & Seal', swatch: '#c1442d' },
-  { id: 'teahouse', name: 'Tea House', swatch: '#c88a35' },
-  { id: 'midnightjade', name: 'Midnight Jade', swatch: '#5f9c7a' },
-  { id: 'plumlantern', name: 'Plum Lantern', swatch: '#c0567a' },
-];
-
-function currentTheme() {
-  return localStorage.getItem('appTheme') || 'ricepaper';
-}
-
-function applyTheme(id) {
-  if (id === 'ink-seal') {
-    document.documentElement.removeAttribute('data-theme');
-  } else {
-    document.documentElement.setAttribute('data-theme', id);
-  }
-  localStorage.setItem('appTheme', id);
-}
-
-function renderThemeSwitcher() {
-  const active = currentTheme();
-  const wrap = document.createElement('div');
-  wrap.className = 'theme-switcher';
-  wrap.innerHTML = `
-    <button class="theme-toggle" id="theme-toggle-btn" title="Theme">${icon('palette')}</button>
-    <div class="theme-menu" id="theme-menu">
-      ${THEMES.map((t) => `
-        <div class="theme-option ${t.id === active ? 'active' : ''}" data-theme-id="${t.id}">
-          <span class="theme-swatch" style="background:${t.swatch}"></span>
-          <span>${t.name}</span>
-        </div>
-      `).join('')}
-    </div>
-  `;
-  topActionsEl().appendChild(wrap);
-
-  const menu = wrap.querySelector('#theme-menu');
-  wrap.querySelector('#theme-toggle-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    menu.classList.toggle('open');
-  });
-  wrap.querySelectorAll('.theme-option').forEach((el) => {
-    el.addEventListener('click', () => {
-      applyTheme(el.dataset.themeId);
-      menu.classList.remove('open');
-      renderThemeSwitcher_replace(wrap);
-    });
-  });
-  document.addEventListener('click', () => menu.classList.remove('open'), { once: true });
-}
-
-function renderThemeSwitcher_replace(oldWrap) {
-  oldWrap.remove();
-  renderThemeSwitcher();
-}
-
-// ---------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------
-
-async function render() {
-  const hash = window.location.hash.replace(/^#\/?/, '');
-  const [rootSeg, ...rest] = hash.split('/').filter(Boolean);
-
-  topActionsEl().innerHTML = '';
-  renderThemeSwitcher();
-
-  try {
-    if (!rootSeg) return renderLanding();
-    if (rootSeg === 'teacher') return renderTeacher(rest);
-    if (rootSeg === 'student') return renderStudent(rest);
-    return renderLanding();
-  } catch (err) {
-    mainEl().innerHTML = `
-      <div class="empty-state">
-        <div class="icon">${icon('x', 30)}</div>
-        <h2>Something went wrong</h2>
-        <p>${escapeHtml(err.message)}</p>
-        <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
-      </div>`;
-  }
-}
-
-window.addEventListener('hashchange', render);
-window.addEventListener('DOMContentLoaded', render);
-
-// ---------------------------------------------------------------------
-// Landing
-// ---------------------------------------------------------------------
-
-function renderLanding() {
-  mainEl().innerHTML = `
-    <nav class="nav-menu">
-      <a href="#home-top">Home</a>
-      <a href="#how-it-works">How It Works</a>
-      <a href="#features">Features</a>
-      <a href="#choose-role">Get Started</a>
-    </nav>
-
-    <div class="hero reveal" id="home-top">
-      <div class="eyebrow">${icon('paper', 12)} A self-hosted classroom quiz tool</div>
-      <h1>A quiet place to quiz</h1>
-      <p class="lede">Bring questions your AI chatbot wrote, share a 6-digit code, and watch understanding show up in real time - no accounts required to take a quiz, no spreadsheets to grade by hand.</p>
-    </div>
-
-    <div class="section-title reveal" id="how-it-works">${icon('copy', 14)} How it works</div>
-    <div class="use-case-grid">
-      <div class="use-case-card reveal">
-        <div class="step">01</div>
-        <h4>Teacher writes a quiz in minutes</h4>
-        <p>Paste your lesson material into any free AI chatbot with our ready-made prompt, then drop the JSON it returns straight into the app.</p>
-      </div>
-      <div class="use-case-card reveal">
-        <div class="step">02</div>
-        <h4>Students join with a code</h4>
-        <p>No sign-up, no app download - just the 6-digit code and their name, then straight into the quiz with a single overall timer.</p>
-      </div>
-      <div class="use-case-card reveal">
-        <div class="step">03</div>
-        <h4>Everyone sees results instantly</h4>
-        <p>Streaks and speed bonuses keep it fun while it's happening; the teacher's dashboard shows accuracy and full answer review right after.</p>
-      </div>
-    </div>
-
-    <div class="section-title reveal" id="features">${icon('users', 14)} Built for a real classroom</div>
-    <div class="use-case-grid">
-      <div class="use-case-card reveal">
-        <div class="step">${icon('clock', 16)}</div>
-        <h4>One quiz-wide timer</h4>
-        <p>A single countdown for the whole quiz, not per question - fairer for students who think longer on one hard character.</p>
-      </div>
-      <div class="use-case-card reveal">
-        <div class="step">${icon('check', 16)}</div>
-        <h4>Streaks that feel like a game</h4>
-        <p>Consecutive correct answers trigger an on-screen streak animation, on top of a separate XP score built for fun, not grading.</p>
-      </div>
-      <div class="use-case-card reveal">
-        <div class="step">${icon('paper', 16)}</div>
-        <h4>Two scores, two purposes</h4>
-        <p>An accuracy score out of 100 for the gradebook, and an uncapped XP score that rewards speed and streaks for the student.</p>
-      </div>
-    </div>
-
-    <div class="section-title reveal" id="choose-role">${icon('arrowRight', 14)} Choose your role</div>
-    <div class="choice-grid">
-      <div class="choice-card reveal" onclick="go('teacher')">
-        <div class="icon">${icon('chalkboard', 30)}</div>
-        <h3>I'm the teacher</h3>
-        <p>Create quizzes and review results</p>
-      </div>
-      <div class="choice-card reveal" onclick="go('student/join')">
-        <div class="icon">${icon('student', 30)}</div>
-        <h3>I'm a student</h3>
-        <p>Enter a code and take a quiz</p>
-      </div>
-    </div>
-  `;
-  initScrollReveal();
-}
-
-function initScrollReveal() {
-  if (window.__revealObserver) window.__revealObserver.disconnect();
-  const groups = {};
-  const els = Array.from(mainEl().querySelectorAll('.reveal'));
-  els.forEach((el) => {
-    const parentKey = el.parentElement;
-    groups[parentKey] = groups[parentKey] || 0;
-    el.style.setProperty('--delay', groups[parentKey]);
-    groups[parentKey] += 1;
-  });
-
-  if (!('IntersectionObserver' in window)) {
-    els.forEach((el) => el.classList.add('in-view'));
-    return;
-  }
-
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('in-view');
-        io.unobserve(entry.target);
-      }
-    });
-  }, { threshold: 0.15 });
-  els.forEach((el) => io.observe(el));
-  window.__revealObserver = io;
-}
-
-// ---------------------------------------------------------------------
-// Teacher: Auth & Dashboard
-// ---------------------------------------------------------------------
-
-function isTeacherLoggedIn() {
-  return !!localStorage.getItem('teacherKey');
-}
-
-function teacherLogout() {
-  localStorage.removeItem('teacherKey');
-  go('');
-}
-
-function renderTeacherLogin() {
-  mainEl().innerHTML = `
-    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
-    <div class="card" style="max-width: 420px; margin: 20px auto;">
-      <div class="icon" style="color: var(--accent); margin-bottom: 10px;">${icon('key', 26)}</div>
-      <h2>Teacher passcode</h2>
-      <p>The passcode you set in your .env file when you set up the app.</p>
-      <form id="login-form">
-        <div class="field">
-          <input class="input" type="password" id="passcode" placeholder="Passcode" autofocus required />
-        </div>
-        <div id="login-error" class="error-text"></div>
-        <button class="btn btn-primary btn-block" type="submit">${icon('arrowRight')} Enter dashboard</button>
-      </form>
-    </div>
-  `;
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const passcode = document.getElementById('passcode').value;
-    const errorEl = document.getElementById('login-error');
-    errorEl.textContent = '';
-    try {
-      await Api.login(passcode);
-      localStorage.setItem('teacherKey', passcode);
-      go('teacher');
-    } catch (err) {
-      errorEl.textContent = err.message;
-    }
-  });
-}
-
-function renderTeacherTopActions() {
-  topActionsEl().insertAdjacentHTML('beforeend', `
-    <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
-  `);
-}
-
-async function renderTeacher(rest) {
-  if (!isTeacherLoggedIn()) return renderTeacherLogin();
-  renderTeacherTopActions();
-
-  const page = rest[0];
-  if (!page) return renderTeacherDashboard();
-  if (page === 'new') return renderTeacherNewQuiz();
-  if (page === 'quiz' && rest[1]) return renderTeacherResults(rest[1]);
-  return renderTeacherDashboard();
-}
-
-async function renderTeacherDashboard() {
-  mainEl().innerHTML = `<div class="empty-state"><p>Loading your quizzes…</p></div>`;
-  const quizzes = await Api.listQuizzes();
-
-  const listHtml = quizzes.length ? quizzes.map((q) => `
-    <div class="list-card" onclick="go('teacher/quiz/${q.id}')">
-      <div>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <div class="list-card-title">${escapeHtml(q.title)}</div>
-          <button class="btn btn-ghost btn-sm" title="Edit Title" data-quiz-id="${q.id}" data-quiz-title="${escapeHtml(q.title)}" onclick="event.stopPropagation(); editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
-        </div>
-        <div class="list-card-meta">
-          <span>${icon('paper', 14)} ${q.questionCount} questions</span>
-          <span>${icon('users', 14)} ${q.attemptCount} responses</span>
-          <span>${icon('clock', 14)} ${formatDate(q.createdAt)}</span>
-        </div>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px;">
-        <span class="badge">${icon('key', 13)} ${q.code}</span>
-        <button class="btn btn-danger btn-sm" title="Delete Quiz" onclick="event.stopPropagation(); deleteQuiz('${q.id}')">${icon('trash')}</button>
-      </div>
-    </div>
-  `).join('') : `
-    <div class="empty-state">
-      <div class="icon">${icon('paper', 30)}</div>
-      <h3>No quizzes yet</h3>
-      <p>Generate one with an AI chatbot, then paste the JSON in.</p>
-    </div>
-  `;
-
-  mainEl().innerHTML = `
-    <div class="row-between" style="margin-bottom: 20px;">
-      <h1 style="margin:0;">Your quizzes</h1>
-      <button class="btn btn-primary" onclick="go('teacher/new')">${icon('plus')} New quiz</button>
-    </div>
-    ${listHtml}
-  `;
-}
-
-// ---------------------------------------------------------------------
-// Modal - small centered dialog with a dimmed backdrop. Click the
-// backdrop or press Escape to dismiss.
-// ---------------------------------------------------------------------
-function modalEscHandler(e) {
-  if (e.key === 'Escape') closeModal();
-}
-
-function closeModal() {
-  const overlay = document.getElementById('modal-overlay');
-  document.removeEventListener('keydown', modalEscHandler);
-  if (!overlay) return;
-  overlay.classList.remove('show');
-  setTimeout(() => overlay.remove(), 160);
-}
-
-function openModal(innerHtml, { onMount } = {}) {
-  const prev = document.getElementById('modal-overlay');
-  if (prev) prev.remove();
-  document.removeEventListener('keydown', modalEscHandler);
-
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal-card">${innerHtml}</div>`;
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeModal();
-  });
-  document.body.appendChild(overlay);
-  document.addEventListener('keydown', modalEscHandler);
-  requestAnimationFrame(() => overlay.classList.add('show'));
-
-  if (onMount) onMount(overlay);
-}
-
-// Edit quiz title - opens a small modal with the current name
-// pre-filled and selected, ready to type over.
-function editQuizTitle(btn) {
-  const quizId = btn.dataset.quizId;
-  const currentTitle = btn.dataset.quizTitle;
-
-  openModal(`
-    <div class="modal-icon">${icon('paper', 20)}</div>
-    <h3 class="modal-title">Rename quiz</h3>
-    <p class="modal-subtitle">Students see this title when they join with the quiz code.</p>
-    <div class="field" style="margin-bottom: 4px;">
-      <input class="input" id="modal-title-input" maxlength="120" value="${escapeHtml(currentTitle)}" />
-    </div>
-    <div class="error-text" id="modal-title-error"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" type="button" id="modal-cancel-btn">Cancel</button>
-      <button class="btn btn-primary" type="button" id="modal-save-btn">${icon('check', 14)} Save name</button>
-    </div>
-  `, {
-    onMount: (overlay) => {
-      const input = overlay.querySelector('#modal-title-input');
-      const errorEl = overlay.querySelector('#modal-title-error');
-      const saveBtn = overlay.querySelector('#modal-save-btn');
-      input.focus();
-      input.select();
-
-      const save = async () => {
-        const newTitle = input.value.trim();
-        errorEl.textContent = '';
-        if (!newTitle) { errorEl.textContent = "Quiz name can't be empty."; return; }
-        if (newTitle === currentTitle) { closeModal(); return; }
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Saving…';
-        try {
-          await Api.updateQuizTitle(quizId, newTitle);
-          closeModal();
-          render();
-        } catch (err) {
-          errorEl.textContent = err.message;
-          saveBtn.disabled = false;
-          saveBtn.innerHTML = `${icon('check', 14)} Save name`;
-        }
-      };
-
-      overlay.querySelector('#modal-cancel-btn').addEventListener('click', closeModal);
-      saveBtn.addEventListener('click', save);
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
-    },
-  });
-}
-
-// ---------------------------------------------------------------------
-// Teacher: new quiz
-// ---------------------------------------------------------------------
-
-function renderTeacherNewQuiz() {
-  mainEl().innerHTML = `
-    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher')">${icon('arrowLeft')} Back to quizzes</button>
-    <h1>New quiz</h1>
-    <p>Two steps: get a quiz written for you by any free AI chatbot, then paste what it gives you below.</p>
-
-    <div class="section-title">${icon('copy', 14)} Step 1 · Copy this prompt</div>
-    <div class="row-between" style="align-items:flex-end; flex-wrap:wrap; gap:16px; margin-bottom:14px;">
-      <div class="field" style="max-width:220px; margin-bottom:0;">
-        <label>Student HSK level</label>
-        <select class="input" id="hsk-level">
-          ${[1, 2, 3, 4, 5, 6].map((lvl) => `<option value="${lvl}" ${lvl === 1 ? 'selected' : ''}>HSK ${lvl}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field" style="max-width:140px; margin-bottom:0;">
-        <label>Number of questions</label>
-        <input class="input" type="number" id="question-count" min="4" max="30" value="10" />
-      </div>
-    </div>
-
-    <div class="field" style="margin-bottom:14px;">
-      <label>Question types to include</label>
-      <div class="kind-grid">
-        ${QUESTION_KINDS.map((k) => `
-          <label class="kind-check">
-            <input type="checkbox" data-kind-id="${k.id}" ${k.defaultOn ? 'checked' : ''} />
-            <span>
-              <span class="kind-check-label">${escapeHtml(k.label)}</span>
-              <span class="kind-check-hint">${escapeHtml(k.hint)}</span>
-            </span>
-          </label>
-        `).join('')}
       </div>
       <div id="kind-error" class="error-text"></div>
     </div>
@@ -1117,7 +628,10 @@ async function renderTeacherResults(quizId) {
         </div>
         <p style="margin:0;">${escapeHtml(quiz.description || '')}</p>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="go('teacher/quiz/${quiz.id}/edit')">${icon('paper')} Edit questions & answers</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
+      </div>
     </div>
 
     <div class="card" style="margin-top:18px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
@@ -1230,6 +744,171 @@ function toggleReview(id) {
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+// ---------------------------------------------------------------------
+// Teacher: edit questions & answers
+// This is also the closest thing to a full "answer key" page - every
+// question is shown with its correct answer already selected, so a
+// teacher scanning the page sees the whole quiz + key even before
+// changing anything.
+// ---------------------------------------------------------------------
+
+function qeditOptionRow(text, meaning, isCorrect) {
+  return `
+  <div class="qedit-option-row">
+    <input type="radio" class="qedit-option-correct" ${isCorrect ? 'checked' : ''} title="Mark as the correct answer" />
+    <input class="input qedit-option-text" value="${escapeHtml(text)}" placeholder="Option text" />
+    <input class="input qedit-option-meaning" value="${escapeHtml(meaning || '')}" placeholder="Meaning (optional)" />
+    <button type="button" class="qedit-remove-row muted-link" title="Remove option">${icon('x', 14)}</button>
+  </div>`;
+}
+
+function qeditChunkRow(text) {
+  return `
+  <div class="qedit-option-row">
+    <input class="input qedit-option-text" value="${escapeHtml(text)}" placeholder="Chunk text (pinyin)" />
+    <button type="button" class="qedit-remove-row muted-link" title="Remove chunk">${icon('x', 14)}</button>
+  </div>`;
+}
+
+function qeditCardHtml(q, qi) {
+  if (q.type === 'sentence_reorder') {
+    return `
+    <div class="card qedit-card" data-question-id="${q.id}" data-question-type="sentence_reorder">
+      <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span><span class="badge">Reorder</span></div>
+      <div class="field">
+        <label>Question / instruction</label>
+        <input class="input qedit-question" value="${escapeHtml(q.question)}" />
+      </div>
+      <div class="field">
+        <label>English meaning (optional hint)</label>
+        <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Chunks, in the CORRECT order - this is the answer key</label>
+        <div class="qedit-option-list qedit-chunk-list">
+          ${q.chunks.map((c) => qeditChunkRow(c)).join('')}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm qedit-add-chunk" style="margin-top:8px;">${icon('plus')} Add chunk</button>
+      </div>
+    </div>`;
+  }
+  return `
+  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="multiple_choice">
+    <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span></div>
+    <div class="field">
+      <label>Question</label>
+      <input class="input qedit-question" value="${escapeHtml(q.question)}" />
+    </div>
+    <div class="field">
+      <label>English meaning (optional hint)</label>
+      <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
+    </div>
+    <div class="field" style="margin-bottom:0;">
+      <label>Options - the selected dot is the correct answer</label>
+      <div class="qedit-option-list">
+        ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer)).join('')}
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm qedit-add-option" style="margin-top:8px;">${icon('plus')} Add option</button>
+    </div>
+  </div>`;
+}
+
+async function renderTeacherEditQuestions(quizId) {
+  mainEl().innerHTML = `<div class="empty-state"><p>Loading questions…</p></div>`;
+  const quiz = await Api.getQuiz(quizId);
+
+  // Listeners for add/remove rows are bound to this wrapper element,
+  // which is a fresh DOM node every time this page is opened - not to
+  // #main itself, which stays in the document across every page in
+  // the app and would otherwise pile up one extra duplicate listener
+  // (double, triple-adding rows on click) on every visit.
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = `
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher/quiz/${quiz.id}')">${icon('arrowLeft')} Back to results</button>
+    <h1>Edit questions & answers</h1>
+    <p>Fix a wrong distractor, tighten a confusing question, or correct the answer key. Question order and ids stay the same, so existing student results still line up.</p>
+    <div id="qedit-error" class="error-text" style="margin-bottom:14px;"></div>
+    ${quiz.questions.map((q, i) => qeditCardHtml(q, i)).join('')}
+    <div class="row-between" style="margin-top:20px;">
+      <button class="btn btn-ghost" onclick="go('teacher/quiz/${quiz.id}')">Cancel</button>
+      <button class="btn btn-primary" id="qedit-save-btn">${icon('check')} Save changes</button>
+    </div>
+  `;
+
+  wrapper.addEventListener('click', (e) => {
+    const addOptBtn = e.target.closest('.qedit-add-option');
+    if (addOptBtn) {
+      addOptBtn.closest('.qedit-card').querySelector('.qedit-option-list').insertAdjacentHTML('beforeend', qeditOptionRow('', '', false));
+      return;
+    }
+    const addChunkBtn = e.target.closest('.qedit-add-chunk');
+    if (addChunkBtn) {
+      addChunkBtn.closest('.qedit-card').querySelector('.qedit-chunk-list').insertAdjacentHTML('beforeend', qeditChunkRow(''));
+      return;
+    }
+    const removeBtn = e.target.closest('.qedit-remove-row');
+    if (removeBtn) {
+      const row = removeBtn.closest('.qedit-option-row');
+      const list = row.parentElement;
+      const radio = row.querySelector('.qedit-option-correct');
+      const wasCorrect = radio && radio.checked;
+      row.remove();
+      if (wasCorrect) {
+        const firstRadio = list.querySelector('.qedit-option-correct');
+        if (firstRadio) firstRadio.checked = true;
+      }
+      return;
+    }
+    const saveBtn = e.target.closest('#qedit-save-btn');
+    if (saveBtn) saveQuestionEdits(quiz.id, wrapper, saveBtn);
+  });
+
+  mainEl().innerHTML = '';
+  mainEl().appendChild(wrapper);
+}
+
+async function saveQuestionEdits(quizId, wrapper, saveBtn) {
+  const errorEl = wrapper.querySelector('#qedit-error');
+  errorEl.textContent = '';
+
+  const questions = Array.from(wrapper.querySelectorAll('.qedit-card')).map((card) => {
+    const id = card.dataset.questionId;
+    const type = card.dataset.questionType;
+    const question = card.querySelector('.qedit-question').value.trim();
+    const questionMeaning = card.querySelector('.qedit-meaning').value.trim();
+
+    if (type === 'sentence_reorder') {
+      const chunks = Array.from(card.querySelectorAll('.qedit-option-text')).map((el) => el.value.trim()).filter(Boolean);
+      return { id, type, question, questionMeaning, chunks };
+    }
+
+    const options = [];
+    const optionMeanings = [];
+    let answer = '';
+    card.querySelectorAll('.qedit-option-row').forEach((row) => {
+      const text = row.querySelector('.qedit-option-text').value.trim();
+      if (!text) return;
+      options.push(text);
+      optionMeanings.push(row.querySelector('.qedit-option-meaning').value.trim());
+      if (row.querySelector('.qedit-option-correct').checked) answer = text;
+    });
+    if (!answer && options.length) answer = options[0];
+    return { id, type, question, questionMeaning, options, optionMeanings, answer };
+  });
+
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  try {
+    await Api.updateQuizQuestions(quizId, questions);
+    go(`teacher/quiz/${quizId}`);
+  } catch (err) {
+    const details = err.details ? '<ul style="margin:6px 0 0 18px; padding:0;">' + err.details.map((d) => `<li>${escapeHtml(d)}</li>`).join('') + '</ul>' : '';
+    errorEl.innerHTML = `${escapeHtml(err.message)}${details}`;
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = `${icon('check')} Save changes`;
+  }
+}
+
 async function deleteQuiz(id) {
   if (!confirm('Delete this quiz and all of its responses? This cannot be undone.')) return;
   await Api.deleteQuiz(id);
@@ -1258,6 +937,7 @@ function renderStudent(rest) {
   const page = rest[0];
   if (page === 'quiz') return renderStudentQuiz();
   if (page === 'done') return renderStudentDone();
+  if (page === 'review') return renderStudentReview();
   return renderStudentJoin();
 }
 
@@ -1440,8 +1120,10 @@ function renderMultipleChoiceArea(q, hintUsed) {
 
   const optionsHtml = q.options.map((opt, idx) => {
     let feedbackClass = '';
+    let feedbackIcon = '';
     if (checked && currentValue === opt) {
       feedbackClass = currentAnswer.correct === true ? 'answered-correct' : 'answered-incorrect';
+      feedbackIcon = `<span class="option-mark">${icon(currentAnswer.correct === true ? 'check' : 'x', 16)}</span>`;
     } else if (checking && currentValue === opt) {
       feedbackClass = 'checking';
     }
@@ -1452,6 +1134,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
         <span>${escapeHtml(opt)}</span>
         ${showOptionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
       </span>
+      ${feedbackIcon}
     </div>`;
   }).join('');
 
@@ -1496,11 +1179,16 @@ function renderReorderArea(q) {
 
   const chip = (chunk, kind) => `<div class="reorder-chip ${checked || checking ? 'locked' : ''}" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
 
+  const assembledIcon = checked
+    ? `<span class="option-mark">${icon(currentAnswer.correct === true ? 'check' : 'x', 16)}</span>`
+    : '';
+
   return `
     <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
       ${placed.length === 0
         ? `<span class="reorder-placeholder">Tap words in order to build sentence</span>`
         : placed.map((id) => chip(q.chunks.find((c) => c.id === id), 'assembled')).join('')}
+      ${assembledIcon}
     </div>
     <div class="reorder-pool" id="reorder-pool">
       ${pool.map((c) => chip(c, 'pool')).join('')}
@@ -1631,7 +1319,7 @@ async function confirmCurrentAnswer(questionId) {
 
   let correct = null;
   try {
-    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, usedMeaning, answeredAtMs);
+    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, usedMeaning, answeredAtMs, state.studentQuiz.id);
     correct = res.correct;
   } catch (err) {}
 
@@ -1724,10 +1412,51 @@ function renderStudentDone() {
 
       <h2>Quiz submitted</h2>
       <p>Your teacher can see your result now.</p>
-      <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      <div style="display:flex; gap:8px; justify-content:center;">
+        ${result.review ? `<button class="btn btn-primary" onclick="go('student/review')">${icon('paper')} Review my answers</button>` : ''}
+        <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      </div>
     </div>
   `;
 
   if (isTopTitle) playStreakSound(10);
   else playCorrectSound();
+}
+
+// A student's own answer review right after finishing - same idea as
+// the teacher's per-attempt review, but built entirely from the
+// `review` array the submit response already included, so it needs
+// no extra request.
+function renderStudentReview() {
+  const result = state.studentResult;
+  if (!result || !result.review) return go('');
+
+  const linesHtml = result.review.map((r) => {
+    let givenText, correctText;
+    if (r.type === 'sentence_reorder') {
+      givenText = Array.isArray(r.given) ? r.given.map((id) => r.chunkLabels[id]).join(' ') : '(no answer)';
+      correctText = r.correctAnswer.join(' ');
+    } else {
+      givenText = r.given ?? '(no answer)';
+      correctText = r.correctAnswer;
+    }
+    return `
+      <div class="answer-line">
+        <span class="mark ${r.correct ? 'correct' : 'incorrect'}">${icon(r.correct ? 'check' : 'x', 15)}</span>
+        <div>
+          <div>${escapeHtml(r.question)}</div>
+          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
+            Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  mainEl().innerHTML = `
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('student/done')">${icon('arrowLeft')} Back to results</button>
+    <h1>Your answers</h1>
+    <p>${result.accuracyScore}% correct · ${result.review.filter((r) => r.correct).length} of ${result.review.length} questions</p>
+    <div class="answer-review" style="border-top:none; margin-top:0; padding-top:0;">${linesHtml}</div>
+    <button class="btn btn-ghost" style="margin-top:20px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
+  `;
 }
