@@ -47,16 +47,4 @@ const Api = (() => {
     checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs, quizId) =>
       request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs, quizId }),
   };
-})();    deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`, undefined, { teacher: true }),
-    updateQuizTitle: (id, title) => request('PATCH', `/api/quizzes/${id}/title`, { title }, { teacher: true }),
-    updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings, { teacher: true }),
-    getResults: (id) => request('GET', `/api/quizzes/${id}/results`, undefined, { teacher: true }),
-
-    // Student flow
-    peekQuiz: (code) => request('GET', `/api/join/${code}`),
-    joinQuiz: (code, studentName) => request('POST', `/api/join/${code}`, { studentName }),
-    submitAttempt: (attemptId, answers) => request('POST', `/api/attempts/${attemptId}/submit`, { answers }),
-    checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs) =>
-      request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs }),
-  };
 })();
