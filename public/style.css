@@ -595,6 +595,675 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
   100% { transform: translateX(-50%) translateY(0) scale(1); }
 }
 
+.option-mark {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+.option.answered-correct .option-mark { color: var(--jade); }
+.option.answered-incorrect .option-mark { color: var(--accent); }
+.reorder-assembled .option-mark { margin-left: 4px; }
+.reorder-assembled.answered-correct .option-mark { color: var(--jade); }
+.reorder-assembled.answered-incorrect .option-mark { color: var(--accent); }
+
+.option.answered-correct {
+  border-color: var(--jade);
+  background: var(--jade-soft);
+  animation: correct-flash 0.5s ease;
+}
+.option.answered-incorrect {
+  border-color: var(--accent);
+  animation: shake 0.4s ease;
+}
+@keyframes correct-flash {
+  0% { box-shadow: 0 0 0 0 var(--jade-soft); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.streak-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 14px;
+}
+.streak-flame { color: var(--accent); }
+
+/* Dual score - accuracy (gradebook) vs XP (game) */
+.score-pair { display: flex; gap: 18px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.score-block { text-align: center; }
+.score-block .score-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: 8px;
+}
+.xp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: var(--radius-btn);
+  padding: 6px 14px;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* ===========================================================
+   Title reveal - the big "You are: ___" moment at the end of a
+   quiz. A bigger, gold-tinted version plays for a genuinely
+   flawless run (100% accuracy AND a streak that covered every
+   question) versus an ordinary finish.
+=========================================================== */
+.title-reveal {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  animation: title-drop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+.title-reveal-label {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.title-reveal-icon {
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.title-reveal-top .title-reveal-icon { color: var(--jade); }
+.title-reveal-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 28px;
+  color: var(--accent);
+}
+.title-reveal-pinyin {
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--text-faint);
+  font-family: var(--font-body);
+}
+.title-reveal-meaning {
+  font-size: 13.5px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.title-reveal-top .title-reveal-name {
+  font-size: 34px;
+  color: var(--jade);
+  animation: title-glow 1.4s ease-in-out infinite alternate;
+}
+@keyfra  --radius-lg: 22px;
+  --radius-btn: 999px;
+  --seal-radius: 50%;
+  --seal-border-style: solid;
+  --seal-glow: none;
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  --glow-a: rgba(193, 68, 45, 0.06);
+  --glow-b: rgba(126, 156, 114, 0.04);
+}
+
+/* ===========================================================
+   Theme variants
+   Four cozy themes, each with its own accent palette, display
+   typeface, and shape language. Picked from the palette switcher
+   in the top bar and remembered per browser via localStorage.
+   "ink-seal" (above, the default) needs no override block.
+   Quiz text (Hanzi) always stays legible: each display font stack
+   falls back to Noto Serif SC for any character it doesn't cover,
+   so decorative Latin fonts never swallow the Chinese.
+=========================================================== */
+
+/* Tea House - cocoa surfaces, amber accent, a literary serif,
+   softly rounded corners, and dashed "paper edge" borders. */
+[data-theme="teahouse"] {
+  --bg: #1a140d;
+  --surface: #241c12;
+  --surface-alt: #2e2417;
+  --surface-hover: #392d1c;
+  --border: #423522;
+  --text: #f2e6cf;
+  --text-muted: #b3a180;
+  --text-faint: #7d6f52;
+
+  --accent: #c88a35;
+  --accent-hover: #dea04a;
+  --accent-soft: rgba(200, 138, 53, 0.16);
+
+  --jade: #82a06b;
+  --jade-soft: rgba(130, 160, 107, 0.14);
+
+  --font-display: "Lora", "Noto Serif SC", serif;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-btn: 10px;
+  --seal-radius: 50%;
+  --seal-border-style: dashed;
+  --card-border-style: dashed;
+  --card-border-width: 1.5px;
+  --glow-a: rgba(200, 138, 53, 0.07);
+  --glow-b: rgba(130, 160, 107, 0.05);
+}
+
+/* Midnight Jade - near-black green surfaces, a geometric sans for
+   headings, sharp architectural corners, tablet-shaped seal. */
+[data-theme="midnightjade"] {
+  --bg: #0f1512;
+  --surface: #16201b;
+  --surface-alt: #1c2a22;
+  --surface-hover: #24352b;
+  --border: #2d3f34;
+  --text: #e3ede4;
+  --text-muted: #93a99a;
+  --text-faint: #5f7768;
+
+  --accent: #5f9c7a;
+  --accent-hover: #71b28d;
+  --accent-soft: rgba(95, 156, 122, 0.16);
+
+  --jade: #c8a24f;
+  --jade-soft: rgba(200, 162, 79, 0.14);
+
+  --font-display: "Space Grotesk", "Noto Serif SC", sans-serif;
+
+  --radius-sm: 3px;
+  --radius: 5px;
+  --radius-lg: 8px;
+  --radius-btn: 4px;
+  --seal-radius: 16%;
+  --card-border-style: solid;
+  --card-border-width: 1.5px;
+  --glow-a: rgba(95, 156, 122, 0.07);
+  --glow-b: rgba(200, 162, 79, 0.04);
+}
+
+/* Plum Lantern - deep aubergine surfaces, an elegant high-contrast
+   serif, very soft pill-shaped corners, a faint lantern glow. */
+[data-theme="plumlantern"] {
+  --bg: #150f16;
+  --surface: #1e1620;
+  --surface-alt: #281e2a;
+  --surface-hover: #322635;
+  --border: #3d2f40;
+  --text: #efe3ec;
+  --text-muted: #ac9aaa;
+  --text-faint: #776875;
+
+  --accent: #c0567a;
+  --accent-hover: #d16e8f;
+  --accent-soft: rgba(192, 86, 122, 0.16);
+
+  --jade: #8fae7d;
+  --jade-soft: rgba(143, 174, 125, 0.14);
+
+  --font-display: "Playfair Display", "Noto Serif SC", serif;
+
+  --radius-sm: 16px;
+  --radius: 24px;
+  --radius-lg: 34px;
+  --radius-btn: 999px;
+  --seal-radius: 32%;
+  --seal-glow: 0 0 20px rgba(192, 86, 122, 0.35);
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --glow-a: rgba(192, 86, 122, 0.08);
+  --glow-b: rgba(143, 174, 125, 0.04);
+}
+
+/* Rice Paper - a light editorial theme: cream surfaces, warm
+   caramel accent, a minimal-radius shape language and a Playfair
+   Display headline face, closer to a printed magazine than the
+   other four "cozy dark" themes. This is also the default theme
+   for anyone who has never picked one before (see app.js). */
+[data-theme="ricepaper"] {
+  --bg: #faf6f0;
+  --surface: #ffffff;
+  --surface-alt: #f4eee3;
+  --surface-hover: #ece2d0;
+  --border: #e3d8c6;
+  --text: #2b2620;
+  --text-muted: #6d6255;
+  --text-faint: #a0937e;
+
+  --accent: #8a5a35;
+  --accent-hover: #a2703f;
+  --accent-soft: rgba(138, 90, 53, 0.10);
+
+  --jade: #6b8c63;
+  --jade-soft: rgba(107, 140, 99, 0.12);
+
+  --font-display: "Playfair Display", "Noto Serif SC", serif;
+
+  --radius-sm: 2px;
+  --radius: 4px;
+  --radius-lg: 6px;
+  --radius-btn: 2px;
+  --seal-radius: 50%;
+  --seal-border-style: solid;
+  --seal-glow: none;
+  --card-border-style: solid;
+  --card-border-width: 1px;
+  --shadow: 0 10px 30px rgba(43, 38, 32, 0.08);
+  --glow-a: rgba(138, 90, 53, 0.05);
+  --glow-b: rgba(107, 140, 99, 0.04);
+}
+[data-theme="ricepaper"] .btn-primary { color: #fbf6ee; }
+[data-theme="ricepaper"] .brand-mark { transform: none; }
+[data-theme="ricepaper"] .seal { transform: none; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html, body { scroll-behavior: auto; }
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(circle at 15% 0%, var(--glow-a), transparent 45%),
+    radial-gradient(circle at 100% 30%, var(--glow-b), transparent 40%);
+  transition: background-color 0.2s ease;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0 0 0.4em;
+}
+
+p { line-height: 1.6; color: var(--text-muted); margin: 0 0 1em; }
+a { color: inherit; }
+
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+
+/* ===========================================================
+   Layout shell
+=========================================================== */
+#app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--seal-radius);
+  border: 1.5px solid var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 18px;
+  transform: rotate(-6deg);
+  flex-shrink: 0;
+  transition: border-radius 0.2s ease;
+}
+
+.brand-text { display: flex; flex-direction: column; }
+.brand-text strong { font-family: var(--font-display); font-size: 17px; letter-spacing: 0.02em; }
+.brand-text span { font-size: 12px; color: var(--text-faint); }
+
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+main {
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+main.wide { max-width: 980px; }
+
+footer.hint {
+  text-align: center;
+  padding: 18px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+/* ===========================================================
+   Secondary nav - the row of section links under the topbar on
+   the landing page, mirroring a magazine-style menu bar.
+=========================================================== */
+.nav-menu {
+  display: flex;
+  justify-content: center;
+  gap: 34px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.nav-menu a {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  transition: color 0.15s ease;
+}
+.nav-menu a:hover { color: var(--accent); }
+
+/* ===========================================================
+   Landing hero + use-case sections
+=========================================================== */
+
+/* Scroll-reveal - elements start faded/offset and animate in once
+   they cross into view (see initScrollReveal() in app.js). Cards in
+   the same row stagger slightly via --delay, set in JS per element,
+   so a whole grid doesn't pop in as one flat block. */
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity 0.7s cubic-bezier(0.16, 0.84, 0.44, 1), transform 0.7s cubic-bezier(0.16, 0.84, 0.44, 1);
+  transition-delay: calc(var(--delay, 0) * 90ms);
+}
+.reveal.in-view {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+.hero {
+  text-align: center;
+  padding: 56px 20px 20px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.hero .eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+.hero h1 {
+  font-size: 38px;
+  margin-bottom: 14px;
+}
+.hero p.lede {
+  font-size: 16px;
+  max-width: 500px;
+  margin: 0 auto 28px;
+}
+
+.use-case-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin: 40px 0 56px;
+}
+.use-case-card {
+  padding: 22px 18px;
+  border: var(--card-border-width) var(--card-border-style) var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.use-case-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow);
+  border-color: var(--accent);
+}
+.use-case-card .step {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.use-case-card h4 { margin-bottom: 6px; font-size: 15.5px; }
+.use-case-card p { font-size: 13px; margin: 0; }
+
+@media (max-width: 640px) {
+  .use-case-grid { grid-template-columns: 1fr; }
+  .nav-menu { gap: 18px; }
+  .hero h1 { font-size: 28px; }
+}
+
+/* ===========================================================
+   Buttons
+=========================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  border-radius: var(--radius-btn);
+  border: 1px solid transparent;
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, border-radius 0.2s ease;
+}
+.btn:hover { background: var(--surface-hover); }
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  color: #fbf1e6;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+}
+.btn-ghost:hover { border-color: var(--text-faint); }
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--accent);
+}
+.btn-danger:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+.btn-sm { padding: 7px 14px; font-size: 13px; }
+.btn-block { width: 100%; justify-content: center; }
+
+/* ===========================================================
+   Form elements
+=========================================================== */
+.field { margin-bottom: 18px; }
+.field label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 7px;
+  letter-spacing: 0.01em;
+}
+
+.input, textarea.input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.input:focus { border-color: var(--accent); }
+.input::placeholder { color: var(--text-faint); }
+
+textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mono); font-size: 13px; line-height: 1.55; }
+
+.input-code {
+  font-family: var(--font-mono);
+  letter-spacing: 0.35em;
+  text-align: center;
+  font-size: 22px;
+  padding: 14px;
+}
+
+/* ===========================================================
+   Cards
+=========================================================== */
+.card {
+  background: var(--surface);
+  border: var(--card-border-width) var(--card-border-style) var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+.card-quiet {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+
+.list-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--surface);
+  border: var(--card-border-width) var(--card-border-style) var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.list-card:hover { border-color: var(--text-faint); }
+
+.list-card-title { font-family: var(--font-display); font-size: 16px; margin-bottom: 4px; }
+.list-card-meta { font-size: 12.5px; color: var(--text-faint); display: flex; gap: 14px; }
+
+/* ===========================================================
+   Choice landing (Teacher / Student)
+=========================================================== */
+.choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 28px;
+}
+@media (max-width: 560px) {
+  .choice-grid { grid-template-columns: 1fr; }
+}
+
+.choice-card {
+  background: var(--surface);
+  border: var(--card-border-width) var(--card-border-style) var(--border);
+  border-radius: var(--radius-lg);
+  padding: 30px 22px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.25s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1), box-shadow 0.25s ease;
+}
+.choice-card:hover { border-color: var(--accent); transform: translateY(-4px); box-shadow: var(--shadow); }
+.choice-card .icon { color: var(--accent); margin-bottom: 14px; }
+.choice-card h3 { margin-bottom: 6px; }
+.choice-card p { font-size: 13.5px; margin: 0; }
+
+/* ===========================================================
+   Icons - simple stroke-based SVGs, no emoji
+=========================================================== */
+.icon { display: inline-flex; }
+.icon svg { display: block; }
+
+/* ===========================================================
+   Seal stamp - the signature element, used on scores/results
+=========================================================== */
+.seal {
+  width: 74px;
+  height: 74px;
+  border-radius: var(--seal-radius);
+  border: 2.5px var(--seal-border-style) var(--accent);
+  box-shadow: var(--seal-glow);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  transform: rotate(-4deg);
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  transition: border-radius 0.2s ease;
+}
+.seal.jade { border-color: var(--jade); color: var(--jade); }
+.seal .seal-score { font-size: 20px; font-weight: 700; line-height: 1; }
+.seal .seal-total { font-size: 10px; color: var(--text-faint); margin-top: 2px; }
+
+/* ===========================================================
+   Streak feedback - fires briefly whenever an answer is marked
+   right, escalating at 3/5/10 in a row. Pure CSS/JS, no
+   backend round trip beyond the immediate correctness check.
+=========================================================== */
+.streak-banner {
+  position: fixed;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-14px);
+  background: var(--jade);
+  color: #0f1512;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 20px;
+  border-radius: var(--radius-btn);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 50;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.streak-banner.toast-warn { background: var(--accent); color: #fbf1e6; }
+.streak-banner.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  animation: streak-pop 0.4s ease;
+}
+@keyframes streak-pop {
+  0% { transform: translateX(-50%) translateY(0) scale(0.85); }
+  50% { transform: translateX(-50%) translateY(0) scale(1.08); }
+  100% { transform: translateX(-50%) translateY(0) scale(1); }
+}
+
 .option.answered-correct {
   border-color: var(--jade);
   background: var(--jade-soft);
