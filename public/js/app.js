@@ -1431,7 +1431,7 @@ function renderStudentReview() {
   const result = state.studentResult;
   if (!result || !result.review) return go('');
 
-  const linesHtml = result.review.map((r) => {
+  const linesHtml = result.review.map((r, idx) => {
     let givenText, correctText;
     if (r.type === 'sentence_reorder') {
       givenText = Array.isArray(r.given) ? r.given.map((id) => r.chunkLabels[id]).join(' ') : '(no answer)';
@@ -1443,10 +1443,11 @@ function renderStudentReview() {
     return `
       <div class="answer-line">
         <span class="mark ${r.correct ? 'correct' : 'incorrect'}">${icon(r.correct ? 'check' : 'x', 15)}</span>
-        <div>
-          <div>${escapeHtml(r.question)}</div>
-          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}
+        <div style="flex:1;">
+          <div><span class="answer-num">${idx + 1}.</span> ${escapeHtml(r.question)}</div>
+          <div class="answer-detail">
+            <div>Your answer: ${escapeHtml(givenText)}</div>
+            ${!r.correct ? `<div>Correct answer: ${escapeHtml(correctText)}</div>` : ''}
           </div>
         </div>
       </div>`;
