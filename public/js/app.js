@@ -700,7 +700,12 @@ function renderAttemptRow(quiz, attempt) {
             ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
           </div>
         </div>
-        ${!pending ? `<button class="btn btn-ghost btn-sm" onclick="toggleReview('${reviewId}')">${icon('paper', 14)} Review</button>` : ''}
+        ${!pending ? `
+        <button class="btn btn-ghost btn-review" id="btn-${reviewId}" onclick="toggleReview('${reviewId}')">
+          ${icon('paper', 14)}
+          <span class="btn-review-label">Review</span>
+          <span class="btn-review-chevron">${icon('arrowRight', 12)}</span>
+        </button>` : ''}
       </div>
       ${!pending ? `<div id="${reviewId}" class="answer-review" style="display:none; width:100%;">${renderAnswerReview(quiz, attempt)}</div>` : ''}
     </div>
@@ -708,7 +713,7 @@ function renderAttemptRow(quiz, attempt) {
 }
 
 function renderAnswerReview(quiz, attempt) {
-  return quiz.questions.map((q) => {
+  return quiz.questions.map((q, idx) => {
     const given = attempt.answers[q.id];
     const value = given ? given.value : undefined;
     const usedMeaning = given && given.usedMeaning === true;
@@ -716,7 +721,7 @@ function renderAnswerReview(quiz, attempt) {
     let isCorrect, answeredText, correctText;
     if (q.type === 'sentence_reorder') {
       const total = q.chunks.length;
-      isCorrect = Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+      isCorrect = Array.isArray(value) && value.length === total && value.every((id, i) => id === i);
       answeredText = Array.isArray(value) ? value.map((id) => q.chunks[id]).join(' ') : '(no answer)';
       correctText = q.chunks.join(' ');
     } else {
@@ -728,11 +733,12 @@ function renderAnswerReview(quiz, attempt) {
     return `
       <div class="answer-line">
         <span class="mark ${isCorrect ? 'correct' : 'incorrect'}">${icon(isCorrect ? 'check' : 'x', 15)}</span>
-        <div>
-          <div>${escapeHtml(q.question)}</div>
-          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}
-            ${usedMeaning && isCorrect ? ' · meaning was shown, half credit' : ''}
+        <div style="flex:1;">
+          <div><span class="answer-num">${idx + 1}.</span> ${escapeHtml(q.question)}</div>
+          <div class="answer-detail">
+            <div>Answered: ${escapeHtml(answeredText)}</div>
+            ${!isCorrect ? `<div>Correct: ${escapeHtml(correctText)}</div>` : ''}
+            ${usedMeaning && isCorrect ? `<div>Meaning was shown, half credit</div>` : ''}
           </div>
         </div>
       </div>`;
@@ -741,7 +747,17 @@ function renderAnswerReview(quiz, attempt) {
 
 function toggleReview(id) {
   const el = document.getElementById(id);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (!el) return;
+
+  const opening = el.style.display === 'none';
+  el.style.display = opening ? 'block' : 'none';
+
+  const btn = document.getElementById(`btn-${id}`);
+  if (btn) {
+    btn.classList.toggle('is-open', opening);
+    const label = btn.querySelector('.btn-review-label');
+    if (label) label.textContent = opening ? 'Hide review' : 'Review';
+  }
 }
 
 // ---------------------------------------------------------------------
