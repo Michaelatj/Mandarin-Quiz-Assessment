@@ -1,9 +1,4 @@
 // api.js
-//
-// Every request goes through here. There's no login token - the
-// teacher passcode is stored in localStorage and sent as a header on
-// teacher-only requests; students don't authenticate at all.
-
 const Api = (() => {
   function teacherKey() {
     return localStorage.getItem('teacherKey') || '';
@@ -20,7 +15,7 @@ const Api = (() => {
     });
 
     let data = null;
-    try { data = await res.json(); } catch (_) { /* no body */ }
+    try { data = await res.json(); } catch (_) {}
 
     if (!res.ok) {
       const message = (data && data.error) || `Request failed (${res.status})`;
@@ -40,14 +35,16 @@ const Api = (() => {
     createQuiz: (quizJson) => request('POST', '/api/quizzes', quizJson, { teacher: true }),
     getQuiz: (id) => request('GET', `/api/quizzes/${id}`, undefined, { teacher: true }),
     deleteQuiz: (id) => request('DELETE', `/api/quizzes/${id}`, undefined, { teacher: true }),
+    updateQuizTitle: (id, title) => request('PATCH', `/api/quizzes/${id}/title`, { title }, { teacher: true }),
     updateQuizSettings: (id, settings) => request('PATCH', `/api/quizzes/${id}/settings`, settings, { teacher: true }),
+    updateQuizQuestions: (id, questions) => request('PATCH', `/api/quizzes/${id}/questions`, { questions }, { teacher: true }),
     getResults: (id) => request('GET', `/api/quizzes/${id}/results`, undefined, { teacher: true }),
 
-    // Student flow - no auth
+    // Student flow
     peekQuiz: (code) => request('GET', `/api/join/${code}`),
     joinQuiz: (code, studentName) => request('POST', `/api/join/${code}`, { studentName }),
     submitAttempt: (attemptId, answers) => request('POST', `/api/attempts/${attemptId}/submit`, { answers }),
-    checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs) =>
-      request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs }),
+    checkAnswer: (attemptId, questionId, value, usedMeaning, answeredAtMs, quizId) =>
+      request('POST', `/api/attempts/${attemptId}/answer`, { questionId, value, usedMeaning, answeredAtMs, quizId }),
   };
 })();

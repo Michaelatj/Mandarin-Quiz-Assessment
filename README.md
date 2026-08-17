@@ -99,9 +99,10 @@ on the internet so students can reach it from their own devices.
 
 1. In the app, choose **I'm the teacher**, enter your passcode.
 2. Click **New quiz**. The page shows a ready-made prompt.
-3. Pick the **HSK level** your students are at - it's inserted into
-   the prompt automatically, so the chatbot keeps vocabulary near
-   that level instead of guessing.
+3. Pick the **HSK level** your students are at, how many
+   **questions** you want (4-30), and which **question types** to
+   include - all three change the prompt text live as you adjust
+   them.
 4. Click **Copy prompt**, paste it into any free AI chatbot
    (ChatGPT, Gemini, Grok, or Claude's own free tier all work).
 5. Where the prompt says "Paste your lesson material here", replace
@@ -125,53 +126,81 @@ that, but if you ever see a "not valid JSON" error, that's almost
 always the cause; either ask the chatbot to redo it, or open the
 reply in a text editor and remove the stray quote by hand.
 
-Every question is multiple choice with 4 options, written in Hanzi
-with pinyin next to it, like 汉字 (hànzì), except where the question
-type itself calls for English (see below). The English translation
-of Hanzi content lives in a separate field the student can choose to
-reveal with a **Show meaning** switch while taking the quiz (see
-below) - that keeps the quiz itself immersive while still giving
-students an escape hatch if they're stuck.
+Every Hanzi question or option is written with pinyin next to it,
+like 汉字 (hànzì), including full sentences - every word gets its own
+pinyin, not just the words near a blank. The English translation of
+Hanzi content lives in a separate field the student can choose to
+reveal by tapping the hint lamp while taking the quiz (see below) -
+that keeps the quiz itself immersive while still giving students an
+escape hatch if they're stuck. Whether pinyin shows at all is a
+separate per-quiz setting (see "Hiding pinyin" below) - when a
+teacher turns that off, it's stripped from every question type
+uniformly, sentence-reorder chunks included.
 
-### The three question types the prompt asks for
+### The six question types you can choose from
+
+Pick any combination on the New quiz page - the prompt only asks the
+chatbot for the types you've checked.
 
 - **Fill in the blank** - a Hanzi sentence with `___` where a word or
-  phrase is missing; all 4 options are candidate Hanzi + pinyin.
-- **Guess the Hanzi** - the question is in plain English (e.g. "doing
-  homework"), and the 4 options are Hanzi + pinyin - the student
+  phrase is missing; options are candidate Hanzi + pinyin.
+- **English -> Mandarin** - the question is in plain English (e.g.
+  "doing homework"), and the options are Hanzi + pinyin - the student
   picks the right one.
-- **What does it mean** - the question is Hanzi + pinyin, and the 4
+- **What does it mean** - the question is Hanzi + pinyin, and the
   options are English - this is the one place options are English,
   since the question is specifically testing comprehension of the
   Hanzi shown.
+- **Translate to Indonesian** - the question is a full Hanzi sentence
+  with pinyin, and the options are candidate Indonesian (Bahasa
+  Indonesia) translations of it.
+- **Conversation reply (A to B)** - the question is one line of
+  dialogue from Person A, and the options are candidate replies
+  Person B might give - tests knowing how to respond, not just
+  vocabulary.
+- **Reorder the sentence** - a correct Hanzi sentence broken into
+  4-7 word chunks. The student taps the shuffled chunks in order to
+  rebuild the sentence, rather than picking from options - see below
+  for how it's scored.
+
+The first five all render as ordinary answer buttons. Reorder is the
+only one with different mechanics: the app shuffles the chunks itself
+(the chatbot gives them in correct order and never sees the shuffle),
+the student taps them into the assembled row at the top in the order
+they belong, and a wrong final order can be fixed by tapping any
+assembled chunk to send it back to the pool - same "change your mind"
+freedom as clicking a different multiple-choice option.
 
 ### Editing the prompt yourself
 
 You don't need to come back and ask for prompt changes - it's a
-plain text file: **`public/js/prompt.js`**. Open it in any text
-editor, edit the text inside the backticks, save, and refresh your
-browser. Nothing else needs to change or restart. The one thing to
-preserve is the token `{{HSK_LEVEL}}` somewhere in the text - the
-HSK dropdown on the New quiz page swaps it for whichever level you
-pick right before you copy the prompt. If you remove the token, the
-prompt still works fine, it just always shows whatever level you
-typed in its place instead of updating live.
+plain text file: **`public/js/prompt.js`**. Each question type is
+its own entry in the `QUESTION_KINDS` array near the top, with its
+own `instructions` block - edit the wording there, save, and refresh
+your browser. Nothing else needs to change or restart. To add a
+whole new type, add another entry to `QUESTION_KINDS` following the
+same shape (`id`, `label`, `hint`, `defaultOn`, `instructions`) - as
+long as it still produces `"type": "multiple_choice"` questions, it
+needs no other code changes; a genuinely new *mechanic* (like
+Reorder) would need matching changes in `server.js` and the
+quiz-taking UI in `app.js`.
 
-### The "show meaning" toggle
+### The "show meaning" hint lamp
 
-While taking a quiz, students see a small switch above each question:
-**Show meaning - correct answers earn half credit while it's on**.
-Off by default. If a student turns it on, the English translation of
-the question and each option appears - and any question they answer
-correctly while it's on is only worth half its points. It resets to
-off at the start of every new quiz attempt, and can be flipped on or
-off freely question to question; whatever it's set to at the moment
-they pick an answer is what counts for that question. Their final
+Each question has a small green lightbulb button next to the question
+number - a one-shot hint, not a toggle. Tapping it reveals the
+English translation of that question (and its options, if the type
+has Hanzi options) and permanently marks that question as half
+credit if answered correctly - the lamp lights up amber and can't be
+tapped again for that question. Every other question is unaffected;
+hints are tracked per question, not for the whole quiz. Their final
 score, and yours on the results page, reflect the halving
 automatically - no extra grading step needed. This only has
-something to reveal on fill-in-the-blank and guess-the-Hanzi
-questions, since "what does it mean" questions already show English
-in their options.
+something to reveal on question types with Hanzi in the question or
+options (Fill in the blank, English -> Mandarin, Translate to
+Indonesian, Conversation reply, Reorder the sentence) - "What does it
+mean" questions already show English in their options, so the lamp
+has nothing extra to add there.
 
 ### Hiding pinyin
 
@@ -268,6 +297,9 @@ them to check with you.
 
 ### The quiz format, if you want to write one by hand
 
+Every question is either `"type": "multiple_choice"` or
+`"type": "sentence_reorder"` - the two shapes side by side:
+
 ```json
 {
   "title": "Lesson 3 Checkup",
@@ -288,21 +320,32 @@ them to check with you.
       "optionMeanings": ["Red", "Blue", "Green", "Yellow", "Purple", "Black"],
       "answer": "红色 (hóngsè)",
       "explanation": "红 means red"
+    },
+    {
+      "type": "sentence_reorder",
+      "question": "Arrange: I have two apples",
+      "questionMeaning": "I have two apples",
+      "chunks": ["我 (wǒ)", "有 (yǒu)", "两个 (liǎng gè)", "苹果 (píngguǒ)"],
+      "explanation": "Subject + verb + quantity + object is standard word order here"
     }
   ]
 }
 ```
 
-- Every question is `"type": "multiple_choice"` with at least 4
-  `options` - 5 or 6 is better, since the app only ever shows the
-  student 4 at a time (the correct one plus 3 random others) and
-  needs a pool to pick from.
-- `answer` must be copied exactly, character for character, from one
-  of the `options`.
-- `questionMeaning` and `optionMeanings` are optional - if you leave
-  them out, the "show meaning" toggle simply has nothing to reveal
-  for that question. If you include `optionMeanings`, it must be the
-  same length as `options`, in the same order.
+- `multiple_choice` needs at least 4 `options` - 5 or 6 is better,
+  since the app only ever shows the student 4 at a time (the correct
+  one plus 3 random others) and needs a pool to pick from. `answer`
+  must be copied exactly, character for character, from one of the
+  `options`.
+- `sentence_reorder` needs at least 3 `chunks`, listed in their
+  CORRECT order - the app shuffles them itself before showing a
+  student, and scores by comparing the order the student taps them
+  back into against this original order. It has no `options` or
+  `answer` field.
+- `questionMeaning` is optional on both types - if you leave it out,
+  the hint lamp simply has nothing to reveal for that question.
+  `optionMeanings` (multiple_choice only) is also optional, but if
+  included must be the same length as `options`, in the same order.
 - `explanation` is optional - shown nowhere yet, but handy if you
   want a record of why an answer is correct.
 - Never put a plain `"` character inside a text value - see the note

@@ -11,8 +11,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Lora:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 <script>
-  // Applied before first paint so the page never flashes the default
-  // theme and then switches - see js/app.js for the switcher itself.
   (function () {
     var saved = localStorage.getItem('appTheme') || 'ricepaper';
     if (saved !== 'ink-seal') document.documentElement.setAttribute('data-theme', saved);

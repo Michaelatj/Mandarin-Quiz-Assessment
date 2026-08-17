@@ -10,19 +10,13 @@ const state = {
   studentQuiz: null,
   studentAnswers: {}, // { [questionId]: { value, usedMeaning, answeredAtMs, correct } }
   studentQuestionIndex: 0,
-  studentHintsUsed: {}, // { [questionId]: true } - which questions had the hint lamp clicked; one-way, can't un-use
-  studentQuizStartedAt: null, // Date.now() when the student started the quiz - the ONE clock the whole-quiz timer and every answer's speed bonus are measured against
-  studentStreak: 0, // current consecutive-correct streak
+  studentHintsUsed: {}, // { [questionId]: true }
+  studentReorderProgress: {}, // { [questionId]: [chunkId, ...] }
+  studentQuizStartedAt: null,
+  studentStreak: 0,
   studentBestStreak: 0,
 };
 
-// Handle for the running quiz-wide countdown, if the quiz has a time
-// limit. Module-level (not in `state`) because it's a live timer
-// handle, not data - always cleared at the top of every
-// renderStudentQuiz() call so re-renders never leave a duplicate
-// ticking in the background. Unlike the old per-question timer, this
-// one is NOT restarted on every question - it just keeps ticking
-// against the fixed studentQuizStartedAt for the whole attempt.
 let quizTimerInterval = null;
 function clearQuizTimer() {
   if (quizTimerInterval) {
@@ -32,12 +26,7 @@ function clearQuizTimer() {
 }
 
 // ---------------------------------------------------------------------
-// Sound effects - synthesized with the Web Audio API, no audio files
-// to ship or license. A handful of short tones/chimes, Duolingo-style:
-// a soft "ding" per correct answer, a slightly bigger chime at streak
-// milestones, and a low buzz on a miss. All muted automatically if
-// the browser blocks autoplay before the student has interacted with
-// the page yet - the try/catch just no-ops in that case.
+// Sound effects
 // ---------------------------------------------------------------------
 let audioCtx = null;
 function getAudioCtx() {
@@ -66,25 +55,21 @@ function playTone(freq, startAt, durationSec, type = 'sine', peakGain = 0.12) {
 }
 
 function playCorrectSound() {
-  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) { /* audio blocked, ignore */ }
+  try { playTone(880, 0, 0.14, 'sine', 0.1); } catch (_) {}
 }
 function playIncorrectSound() {
-  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) { /* audio blocked, ignore */ }
+  try { playTone(180, 0, 0.22, 'sawtooth', 0.06); } catch (_) {}
 }
 function playStreakSound(streak) {
   try {
-    // A short ascending arpeggio, one extra note for every milestone
-    // tier reached, so a 10-streak sounds bigger than a 3-streak.
     const notes = [660, 880, 1046, 1318, 1568];
     const tier = streak >= 10 ? 5 : streak >= 5 ? 4 : 3;
     for (let i = 0; i < tier; i++) playTone(notes[i], i * 0.07, 0.16, 'triangle', 0.1);
-  } catch (_) { /* audio blocked, ignore */ }
+  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------
-// Toasts - the small pill that pops in from the top for streak/answer
-// feedback and for the meaning-hint warning. Reused for both so there's
-// one visual language for "something just happened" across the app.
+// Toasts
 // ---------------------------------------------------------------------
 let toastTimeout = null;
 function showToast(text, variant = 'jade') {
@@ -93,7 +78,7 @@ function showToast(text, variant = 'jade') {
   clearTimeout(toastTimeout);
   el.textContent = text;
   el.classList.remove('show', 'toast-jade', 'toast-warn', 'toast-big');
-  void el.offsetWidth; // restart the animation even if it's already showing
+  void el.offsetWidth;
   el.classList.add('show', variant === 'warn' ? 'toast-warn' : 'toast-jade');
   toastTimeout = setTimeout(() => el.classList.remove('show'), 1700);
 }
@@ -118,15 +103,12 @@ function go(hash) {
   const before = window.location.hash;
   window.location.hash = hash;
   if (window.location.hash === before) {
-    // The hash string didn't actually change (e.g. logging in while
-    // already sitting on #teacher), so the browser won't fire
-    // hashchange and render() would never run on its own. Force it.
     render();
   }
 }
 
 // ---------------------------------------------------------------------
-// Theme switcher - 4 cozy palettes, remembered per browser
+// Theme switcher
 // ---------------------------------------------------------------------
 
 const THEMES = [
@@ -291,12 +273,6 @@ function renderLanding() {
   initScrollReveal();
 }
 
-// Fades/slides each .reveal element in the first time it crosses into
-// view, with a small stagger between elements in the same row so a
-// grid of cards doesn't all pop in at once. Elements already on
-// screen at load (usually just the hero) still get the animation -
-// IntersectionObserver fires for anything already intersecting as
-// soon as it's observed, not only on future scroll events.
 function initScrollReveal() {
   if (window.__revealObserver) window.__revealObserver.disconnect();
   const groups = {};
@@ -326,12 +302,7 @@ function initScrollReveal() {
 }
 
 // ---------------------------------------------------------------------
-// Teacher: login
-// ---------------------------------------------------------------------
-
-// ---------------------------------------------------------------------
-// Auth - a single shared teacher passcode, same as the original
-// version of this app. Students never authenticate at all.
+// Teacher: Auth & Dashboard
 // ---------------------------------------------------------------------
 
 function isTeacherLoggedIn() {
@@ -374,10 +345,6 @@ function renderTeacherLogin() {
   });
 }
 
-// ---------------------------------------------------------------------
-// Teacher: dashboard
-// ---------------------------------------------------------------------
-
 function renderTeacherTopActions() {
   topActionsEl().insertAdjacentHTML('beforeend', `
     <button class="btn btn-ghost btn-sm" onclick="teacherLogout()">${icon('logout')} Sign out</button>
@@ -391,6 +358,8 @@ async function renderTeacher(rest) {
   const page = rest[0];
   if (!page) return renderTeacherDashboard();
   if (page === 'new') return renderTeacherNewQuiz();
+  if (page === 'quiz' && rest[1] === undefined) return renderTeacherDashboard();
+  if (page === 'quiz' && rest[2] === 'edit') return renderTeacherEditQuestions(rest[1]);
   if (page === 'quiz' && rest[1]) return renderTeacherResults(rest[1]);
   return renderTeacherDashboard();
 }
@@ -402,14 +371,20 @@ async function renderTeacherDashboard() {
   const listHtml = quizzes.length ? quizzes.map((q) => `
     <div class="list-card" onclick="go('teacher/quiz/${q.id}')">
       <div>
-        <div class="list-card-title">${escapeHtml(q.title)}</div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="list-card-title">${escapeHtml(q.title)}</div>
+          <button class="btn btn-ghost btn-sm" title="Edit Title" data-quiz-id="${q.id}" data-quiz-title="${escapeHtml(q.title)}" onclick="event.stopPropagation(); editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
+        </div>
         <div class="list-card-meta">
           <span>${icon('paper', 14)} ${q.questionCount} questions</span>
           <span>${icon('users', 14)} ${q.attemptCount} responses</span>
           <span>${icon('clock', 14)} ${formatDate(q.createdAt)}</span>
         </div>
       </div>
-      <span class="badge">${icon('key', 13)} ${q.code}</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="badge">${icon('key', 13)} ${q.code}</span>
+        <button class="btn btn-danger btn-sm" title="Delete Quiz" onclick="event.stopPropagation(); deleteQuiz('${q.id}')">${icon('trash')}</button>
+      </div>
     </div>
   `).join('') : `
     <div class="empty-state">
@@ -429,7 +404,93 @@ async function renderTeacherDashboard() {
 }
 
 // ---------------------------------------------------------------------
-// Teacher: new quiz (prompt template + paste JSON)
+// Modal - small centered dialog with a dimmed backdrop. Click the
+// backdrop or press Escape to dismiss.
+// ---------------------------------------------------------------------
+function modalEscHandler(e) {
+  if (e.key === 'Escape') closeModal();
+}
+
+function closeModal() {
+  const overlay = document.getElementById('modal-overlay');
+  document.removeEventListener('keydown', modalEscHandler);
+  if (!overlay) return;
+  overlay.classList.remove('show');
+  setTimeout(() => overlay.remove(), 160);
+}
+
+function openModal(innerHtml, { onMount } = {}) {
+  const prev = document.getElementById('modal-overlay');
+  if (prev) prev.remove();
+  document.removeEventListener('keydown', modalEscHandler);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal-card">${innerHtml}</div>`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal();
+  });
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', modalEscHandler);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  if (onMount) onMount(overlay);
+}
+
+// Edit quiz title - opens a small modal with the current name
+// pre-filled and selected, ready to type over.
+function editQuizTitle(btn) {
+  const quizId = btn.dataset.quizId;
+  const currentTitle = btn.dataset.quizTitle;
+
+  openModal(`
+    <div class="modal-icon">${icon('paper', 20)}</div>
+    <h3 class="modal-title">Rename quiz</h3>
+    <p class="modal-subtitle">Students see this title when they join with the quiz code.</p>
+    <div class="field" style="margin-bottom: 4px;">
+      <input class="input" id="modal-title-input" maxlength="120" value="${escapeHtml(currentTitle)}" />
+    </div>
+    <div class="error-text" id="modal-title-error"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" type="button" id="modal-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" type="button" id="modal-save-btn">${icon('check', 14)} Save name</button>
+    </div>
+  `, {
+    onMount: (overlay) => {
+      const input = overlay.querySelector('#modal-title-input');
+      const errorEl = overlay.querySelector('#modal-title-error');
+      const saveBtn = overlay.querySelector('#modal-save-btn');
+      input.focus();
+      input.select();
+
+      const save = async () => {
+        const newTitle = input.value.trim();
+        errorEl.textContent = '';
+        if (!newTitle) { errorEl.textContent = "Quiz name can't be empty."; return; }
+        if (newTitle === currentTitle) { closeModal(); return; }
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          await Api.updateQuizTitle(quizId, newTitle);
+          closeModal();
+          render();
+        } catch (err) {
+          errorEl.textContent = err.message;
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = `${icon('check', 14)} Save name`;
+        }
+      };
+
+      overlay.querySelector('#modal-cancel-btn').addEventListener('click', closeModal);
+      saveBtn.addEventListener('click', save);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------
+// Teacher: new quiz
 // ---------------------------------------------------------------------
 
 function renderTeacherNewQuiz() {
@@ -439,13 +500,36 @@ function renderTeacherNewQuiz() {
     <p>Two steps: get a quiz written for you by any free AI chatbot, then paste what it gives you below.</p>
 
     <div class="section-title">${icon('copy', 14)} Step 1 · Copy this prompt</div>
-    <div class="field" style="max-width:220px;">
-      <label>Student HSK level</label>
-      <select class="input" id="hsk-level">
-        ${[1, 2, 3, 4, 5, 6].map((lvl) => `<option value="${lvl}" ${lvl === 1 ? 'selected' : ''}>HSK ${lvl}</option>`).join('')}
-      </select>
+    <div class="row-between" style="align-items:flex-end; flex-wrap:wrap; gap:16px; margin-bottom:14px;">
+      <div class="field" style="max-width:220px; margin-bottom:0;">
+        <label>Student HSK level</label>
+        <select class="input" id="hsk-level">
+          ${[1, 2, 3, 4, 5, 6].map((lvl) => `<option value="${lvl}" ${lvl === 1 ? 'selected' : ''}>HSK ${lvl}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="max-width:140px; margin-bottom:0;">
+        <label>Number of questions</label>
+        <input class="input" type="number" id="question-count" min="4" max="30" value="10" />
+      </div>
     </div>
-    <p style="margin-bottom:10px;">Paste it into ChatGPT, Gemini, Grok, Claude, or any chatbot, with your lesson material dropped in where marked. The AI keeps the vocabulary near this level and uses Hanzi with pinyin, not full English.</p>
+
+    <div class="field" style="margin-bottom:14px;">
+      <label>Question types to include</label>
+      <div class="kind-grid">
+        ${QUESTION_KINDS.map((k) => `
+          <label class="kind-check">
+            <input type="checkbox" data-kind-id="${k.id}" ${k.defaultOn ? 'checked' : ''} />
+            <span>
+              <span class="kind-check-label">${escapeHtml(k.label)}</span>
+              <span class="kind-check-hint">${escapeHtml(k.hint)}</span>
+            </span>
+          </label>
+        `).join('')}
+      </div>
+      <div id="kind-error" class="error-text"></div>
+    </div>
+
+    <p style="margin-bottom:10px;">Paste it into ChatGPT, Gemini, Grok, Claude, or any chatbot, with your lesson material dropped in where marked.</p>
     <div class="prompt-box" id="prompt-box"></div>
     <button class="btn btn-ghost btn-sm" style="margin-top:10px;" onclick="copyPrompt()">${icon('copy')} Copy prompt</button>
 
@@ -461,11 +545,27 @@ function renderTeacherNewQuiz() {
 
   const promptBox = document.getElementById('prompt-box');
   const levelSelect = document.getElementById('hsk-level');
+  const countInput = document.getElementById('question-count');
+  const kindCheckboxes = Array.from(document.querySelectorAll('[data-kind-id]'));
+  const kindError = document.getElementById('kind-error');
+
   const updatePromptText = () => {
-    promptBox.textContent = QUIZ_PROMPT_TEMPLATE.replaceAll('{{HSK_LEVEL}}', levelSelect.value);
+    const kindIds = kindCheckboxes.filter((c) => c.checked).map((c) => c.dataset.kindId);
+    if (kindIds.length === 0) {
+      kindError.textContent = 'Pick at least one question type.';
+      promptBox.textContent = '';
+      return;
+    }
+    kindError.textContent = '';
+    let count = parseInt(countInput.value, 10);
+    if (!Number.isFinite(count) || count < 1) count = 10;
+    count = Math.min(30, Math.max(4, count));
+    promptBox.textContent = buildQuizPrompt({ hskLevel: levelSelect.value, questionCount: count, kindIds });
   };
   updatePromptText();
   levelSelect.addEventListener('change', updatePromptText);
+  countInput.addEventListener('input', updatePromptText);
+  kindCheckboxes.forEach((c) => c.addEventListener('change', updatePromptText));
 
   document.getElementById('quiz-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -475,7 +575,7 @@ function renderTeacherNewQuiz() {
     try {
       parsed = JSON.parse(document.getElementById('quiz-json').value);
     } catch (err) {
-      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option (often from an English aside in parentheses) - that breaks the format. Ask the chatbot to redo it without any straight double quotes inside the text, or remove the stray one by hand.';
+      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option - that breaks the format.';
       return;
     }
     try {
@@ -522,10 +622,16 @@ async function renderTeacherResults(quizId) {
 
     <div class="row-between" style="align-items:flex-start;">
       <div>
-        <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
+          <button class="btn btn-ghost btn-sm" data-quiz-id="${quiz.id}" data-quiz-title="${escapeHtml(quiz.title)}" onclick="editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
+        </div>
         <p style="margin:0;">${escapeHtml(quiz.description || '')}</p>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="go('teacher/quiz/${quiz.id}/edit')">${icon('paper')} Edit questions & answers</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
+      </div>
     </div>
 
     <div class="card" style="margin-top:18px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;">
@@ -551,7 +657,7 @@ async function renderTeacherResults(quizId) {
     <div class="field" style="max-width:260px; margin-bottom:24px;">
       <label>Total time limit for the whole quiz (seconds)</label>
       <input class="input" type="number" min="0" step="1" id="time-limit-input" value="${quiz.timeLimitSeconds || 0}" placeholder="0 = off" />
-      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off. One countdown for the entire quiz, not per question. A correct answer's XP score gets up to +50% for answering early, plus a streak bonus for consecutive correct answers - accuracy score (the gradebook number) is never affected.</p>
+      <p style="margin:6px 0 0; font-size:12px;">0 turns the timer off.</p>
     </div>
 
     <div class="section-title">${icon('users', 14)} ${attempts.length} response${attempts.length === 1 ? '' : 's'}</div>
@@ -588,7 +694,7 @@ function renderAttemptRow(quiz, attempt) {
       <div style="display:flex; align-items:center; gap:16px; width:100%;">
         ${seal}
         <div class="attempt-info">
-          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon('star', 11)} ${escapeHtml(attempt.title)}</span>` : ''}</div>
+          <div class="attempt-name">${escapeHtml(attempt.studentName)}${attempt.title ? ` <span class="badge">${icon(attempt.title.icon, 11)} ${escapeHtml(attempt.title.name)} (${escapeHtml(attempt.title.pinyin)})</span>` : ''}</div>
           <div class="attempt-meta">
             ${pending ? 'Started' : 'Submitted'} ${formatDate(attempt.submittedAt || attempt.startedAt)}
             ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
@@ -606,14 +712,26 @@ function renderAnswerReview(quiz, attempt) {
     const given = attempt.answers[q.id];
     const value = given ? given.value : undefined;
     const usedMeaning = given && given.usedMeaning === true;
-    const isCorrect = value === q.answer;
+
+    let isCorrect, answeredText, correctText;
+    if (q.type === 'sentence_reorder') {
+      const total = q.chunks.length;
+      isCorrect = Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+      answeredText = Array.isArray(value) ? value.map((id) => q.chunks[id]).join(' ') : '(no answer)';
+      correctText = q.chunks.join(' ');
+    } else {
+      isCorrect = value === q.answer;
+      answeredText = value ?? '(no answer)';
+      correctText = q.answer;
+    }
+
     return `
       <div class="answer-line">
         <span class="mark ${isCorrect ? 'correct' : 'incorrect'}">${icon(isCorrect ? 'check' : 'x', 15)}</span>
         <div>
           <div>${escapeHtml(q.question)}</div>
           <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Answered: ${escapeHtml(value ?? '(no answer)')}${!isCorrect ? ` · Correct: ${escapeHtml(q.answer)}` : ''}
+            Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}
             ${usedMeaning && isCorrect ? ' · meaning was shown, half credit' : ''}
           </div>
         </div>
@@ -624,6 +742,171 @@ function renderAnswerReview(quiz, attempt) {
 function toggleReview(id) {
   const el = document.getElementById(id);
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// ---------------------------------------------------------------------
+// Teacher: edit questions & answers
+// This is also the closest thing to a full "answer key" page - every
+// question is shown with its correct answer already selected, so a
+// teacher scanning the page sees the whole quiz + key even before
+// changing anything.
+// ---------------------------------------------------------------------
+
+function qeditOptionRow(text, meaning, isCorrect) {
+  return `
+  <div class="qedit-option-row">
+    <input type="radio" class="qedit-option-correct" ${isCorrect ? 'checked' : ''} title="Mark as the correct answer" />
+    <input class="input qedit-option-text" value="${escapeHtml(text)}" placeholder="Option text" />
+    <input class="input qedit-option-meaning" value="${escapeHtml(meaning || '')}" placeholder="Meaning (optional)" />
+    <button type="button" class="qedit-remove-row muted-link" title="Remove option">${icon('x', 14)}</button>
+  </div>`;
+}
+
+function qeditChunkRow(text) {
+  return `
+  <div class="qedit-option-row">
+    <input class="input qedit-option-text" value="${escapeHtml(text)}" placeholder="Chunk text (pinyin)" />
+    <button type="button" class="qedit-remove-row muted-link" title="Remove chunk">${icon('x', 14)}</button>
+  </div>`;
+}
+
+function qeditCardHtml(q, qi) {
+  if (q.type === 'sentence_reorder') {
+    return `
+    <div class="card qedit-card" data-question-id="${q.id}" data-question-type="sentence_reorder">
+      <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span><span class="badge">Reorder</span></div>
+      <div class="field">
+        <label>Question / instruction</label>
+        <input class="input qedit-question" value="${escapeHtml(q.question)}" />
+      </div>
+      <div class="field">
+        <label>English meaning (optional hint)</label>
+        <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Chunks, in the CORRECT order - this is the answer key</label>
+        <div class="qedit-option-list qedit-chunk-list">
+          ${q.chunks.map((c) => qeditChunkRow(c)).join('')}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm qedit-add-chunk" style="margin-top:8px;">${icon('plus')} Add chunk</button>
+      </div>
+    </div>`;
+  }
+  return `
+  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="multiple_choice">
+    <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span></div>
+    <div class="field">
+      <label>Question</label>
+      <input class="input qedit-question" value="${escapeHtml(q.question)}" />
+    </div>
+    <div class="field">
+      <label>English meaning (optional hint)</label>
+      <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
+    </div>
+    <div class="field" style="margin-bottom:0;">
+      <label>Options - the selected dot is the correct answer</label>
+      <div class="qedit-option-list">
+        ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer)).join('')}
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm qedit-add-option" style="margin-top:8px;">${icon('plus')} Add option</button>
+    </div>
+  </div>`;
+}
+
+async function renderTeacherEditQuestions(quizId) {
+  mainEl().innerHTML = `<div class="empty-state"><p>Loading questions…</p></div>`;
+  const quiz = await Api.getQuiz(quizId);
+
+  // Listeners for add/remove rows are bound to this wrapper element,
+  // which is a fresh DOM node every time this page is opened - not to
+  // #main itself, which stays in the document across every page in
+  // the app and would otherwise pile up one extra duplicate listener
+  // (double, triple-adding rows on click) on every visit.
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = `
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher/quiz/${quiz.id}')">${icon('arrowLeft')} Back to results</button>
+    <h1>Edit questions & answers</h1>
+    <p>Fix a wrong distractor, tighten a confusing question, or correct the answer key. Question order and ids stay the same, so existing student results still line up.</p>
+    <div id="qedit-error" class="error-text" style="margin-bottom:14px;"></div>
+    ${quiz.questions.map((q, i) => qeditCardHtml(q, i)).join('')}
+    <div class="row-between" style="margin-top:20px;">
+      <button class="btn btn-ghost" onclick="go('teacher/quiz/${quiz.id}')">Cancel</button>
+      <button class="btn btn-primary" id="qedit-save-btn">${icon('check')} Save changes</button>
+    </div>
+  `;
+
+  wrapper.addEventListener('click', (e) => {
+    const addOptBtn = e.target.closest('.qedit-add-option');
+    if (addOptBtn) {
+      addOptBtn.closest('.qedit-card').querySelector('.qedit-option-list').insertAdjacentHTML('beforeend', qeditOptionRow('', '', false));
+      return;
+    }
+    const addChunkBtn = e.target.closest('.qedit-add-chunk');
+    if (addChunkBtn) {
+      addChunkBtn.closest('.qedit-card').querySelector('.qedit-chunk-list').insertAdjacentHTML('beforeend', qeditChunkRow(''));
+      return;
+    }
+    const removeBtn = e.target.closest('.qedit-remove-row');
+    if (removeBtn) {
+      const row = removeBtn.closest('.qedit-option-row');
+      const list = row.parentElement;
+      const radio = row.querySelector('.qedit-option-correct');
+      const wasCorrect = radio && radio.checked;
+      row.remove();
+      if (wasCorrect) {
+        const firstRadio = list.querySelector('.qedit-option-correct');
+        if (firstRadio) firstRadio.checked = true;
+      }
+      return;
+    }
+    const saveBtn = e.target.closest('#qedit-save-btn');
+    if (saveBtn) saveQuestionEdits(quiz.id, wrapper, saveBtn);
+  });
+
+  mainEl().innerHTML = '';
+  mainEl().appendChild(wrapper);
+}
+
+async function saveQuestionEdits(quizId, wrapper, saveBtn) {
+  const errorEl = wrapper.querySelector('#qedit-error');
+  errorEl.textContent = '';
+
+  const questions = Array.from(wrapper.querySelectorAll('.qedit-card')).map((card) => {
+    const id = card.dataset.questionId;
+    const type = card.dataset.questionType;
+    const question = card.querySelector('.qedit-question').value.trim();
+    const questionMeaning = card.querySelector('.qedit-meaning').value.trim();
+
+    if (type === 'sentence_reorder') {
+      const chunks = Array.from(card.querySelectorAll('.qedit-option-text')).map((el) => el.value.trim()).filter(Boolean);
+      return { id, type, question, questionMeaning, chunks };
+    }
+
+    const options = [];
+    const optionMeanings = [];
+    let answer = '';
+    card.querySelectorAll('.qedit-option-row').forEach((row) => {
+      const text = row.querySelector('.qedit-option-text').value.trim();
+      if (!text) return;
+      options.push(text);
+      optionMeanings.push(row.querySelector('.qedit-option-meaning').value.trim());
+      if (row.querySelector('.qedit-option-correct').checked) answer = text;
+    });
+    if (!answer && options.length) answer = options[0];
+    return { id, type, question, questionMeaning, options, optionMeanings, answer };
+  });
+
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  try {
+    await Api.updateQuizQuestions(quizId, questions);
+    go(`teacher/quiz/${quizId}`);
+  } catch (err) {
+    const details = err.details ? '<ul style="margin:6px 0 0 18px; padding:0;">' + err.details.map((d) => `<li>${escapeHtml(d)}</li>`).join('') + '</ul>' : '';
+    errorEl.innerHTML = `${escapeHtml(err.message)}${details}`;
+    saveBtn.disabled = false;
+    saveBtn.innerHTML = `${icon('check')} Save changes`;
+  }
 }
 
 async function deleteQuiz(id) {
@@ -642,7 +925,7 @@ function copyText(text, btn) {
 }
 
 // ---------------------------------------------------------------------
-// Student: join
+// Student: join & quiz
 // ---------------------------------------------------------------------
 
 function getQueryParam(name) {
@@ -654,6 +937,7 @@ function renderStudent(rest) {
   const page = rest[0];
   if (page === 'quiz') return renderStudentQuiz();
   if (page === 'done') return renderStudentDone();
+  if (page === 'review') return renderStudentReview();
   return renderStudentJoin();
 }
 
@@ -693,6 +977,7 @@ function renderStudentJoin() {
       state.studentAnswers = {};
       state.studentQuestionIndex = 0;
       state.studentHintsUsed = {};
+      state.studentReorderProgress = {};
       state.studentQuizStartedAt = Date.now();
       state.studentStreak = 0;
       state.studentBestStreak = 0;
@@ -703,12 +988,28 @@ function renderStudentJoin() {
   });
 }
 
-// ---------------------------------------------------------------------
-// Student: taking the quiz (one question at a time)
-// ---------------------------------------------------------------------
+function studentSurrender() {
+  if (confirm("Are you sure you want to surrender? Your progress will be cancelled.")) {
+    clearQuizTimer();
+    state.studentAttemptId = null;
+    state.studentQuiz = null;
+    state.studentAnswers = {};
+    state.studentQuestionIndex = 0;
+    go('student/join');
+  }
+}
 
 function renderStudentQuiz() {
   if (!state.studentQuiz) return go('student/join');
+  if (!state.studentQuiz.questions || state.studentQuiz.questions.length === 0) {
+    mainEl().innerHTML = `
+      <div class="empty-state">
+        <p>This quiz has no questions - ask your teacher to check it.</p>
+        <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      </div>
+    `;
+    return;
+  }
   clearQuizTimer();
 
   const quiz = state.studentQuiz;
@@ -716,35 +1017,46 @@ function renderStudentQuiz() {
   const q = quiz.questions[i];
   const total = quiz.questions.length;
   const isLast = i === total - 1;
-  const currentAnswer = state.studentAnswers[q.id];
-  const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const hintUsed = !!state.studentHintsUsed[q.id];
-  const showMeaning = hintUsed && (q.questionMeaning || q.optionMeanings);
+  const showMeaning = hintUsed && !!q.questionMeaning;
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
+  const answered = !!state.studentAnswers[q.id];
 
-  const optionsHtml = q.options.map((opt, idx) => {
-    let feedbackClass = '';
-    if (currentAnswer && currentValue === opt) {
-      feedbackClass = currentAnswer.correct === true ? 'answered-correct'
-        : currentAnswer.correct === false ? 'answered-incorrect'
-        : 'checking'; // optimistic state while waiting on the correctness check
-    }
-    return `
-    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass}" data-option-index="${idx}">
-      <span class="option-marker"></span>
-      <span>
-        <span>${escapeHtml(opt)}</span>
-        ${showMeaning && q.optionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
-      </span>
-    </div>`;
-  }).join('');
+  const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
+
+  // Two-step answering: picking an option only highlights it and can
+  // still be changed. The first press of the primary button checks it
+  // (revealing right/wrong) instead of moving on; only once it's been
+  // checked (or was left blank) does the same button advance.
+  const currentAnswer = state.studentAnswers[q.id];
+  const isChecking = !!(currentAnswer && currentAnswer.checking);
+  const hasUncheckedAnswer = !!currentAnswer && !currentAnswer.checked;
+  const primaryLabel = isChecking
+    ? 'Checking…'
+    : hasUncheckedAnswer
+      ? `Check answer ${icon('check')}`
+      : (isLast ? `${icon('check')} Submit quiz` : `Next ${icon('arrowRight')}`);
+  const primaryAction = 'studentCheckOrAdvance()';
+
+  const qnavHtml = `
+    <div class="qnav" id="qnav">
+      ${quiz.questions.map((qq, idx) => {
+        const a = state.studentAnswers[qq.id];
+        let statusClass = '';
+        if (a && a.checked) statusClass = a.correct === true ? 'qnav-correct' : 'qnav-incorrect';
+        else if (a) statusClass = 'qnav-pending';
+        return `<button type="button" class="qnav-item ${idx === i ? 'current' : ''} ${statusClass}" data-jump-index="${idx}" title="Question ${idx + 1}">${idx + 1}</button>`;
+      }).join('')}
+    </div>
+  `;
 
   mainEl().innerHTML = `
     <div class="progress-track"><div class="progress-fill" style="width:${((i + 1) / total) * 100}%"></div></div>
+    ${qnavHtml}
 
     ${timeLimitSeconds > 0 ? `
       <div class="timer-row">
-        <span>${icon('clock', 14)} One timer for the whole quiz - answer quickly for a bigger bonus</span>
+        <span>${icon('clock', 14)} One timer for the whole quiz</span>
         <span id="timer-value">${timeLimitSeconds}s</span>
       </div>
       <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
@@ -757,48 +1069,180 @@ function renderStudentQuiz() {
     <div class="question-block">
       <div class="row-between" style="margin-bottom: 2px;">
         <div class="question-index">Question ${i + 1} of ${total}</div>
-        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button"
-          title="${hintUsed ? 'Hint used - this question is worth half credit if correct' : 'Show a hint (halves credit for this question if correct)'}">
+        <button class="hint-lamp ${hintUsed ? 'lit' : ''}" id="hint-lamp-btn" type="button" ${answered ? 'disabled' : ''}>
           ${icon('lightbulb', 18)}
         </button>
       </div>
       <div class="question-text">${escapeHtml(q.question)}</div>
-      ${showMeaning && q.questionMeaning ? `<div class="meaning-text">${escapeHtml(q.questionMeaning)}</div>` : ''}
-      <div class="option-list">${optionsHtml}</div>
+      ${showMeaning ? `<div class="meaning-text">${escapeHtml(q.questionMeaning)}</div>` : ''}
+      ${answerAreaHtml}
     </div>
     <div class="row-between">
-      <button class="btn btn-ghost" ${i === 0 ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
-      ${isLast
-        ? `<button class="btn btn-primary" onclick="studentSubmit()">${icon('check')} Submit quiz</button>`
-        : `<button class="btn btn-primary" onclick="studentNext()">Next ${icon('arrowRight')}</button>`}
+      <button class="btn btn-danger btn-sm" onclick="studentSurrender()">🏳️ Quit Quiz</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost" ${i === 0 || isChecking ? 'disabled' : ''} onclick="studentPrev()">${icon('arrowLeft')} Back</button>
+        <button class="btn btn-primary" ${isChecking ? 'disabled' : ''} onclick="${primaryAction}">${primaryLabel}</button>
+      </div>
     </div>
   `;
 
-  // Bound with addEventListener (not inline onclick) so option text -
-  // Hanzi, pinyin, quotes, anything - never has to survive being
-  // embedded inside an HTML attribute string.
-  mainEl().querySelectorAll('.option').forEach((el) => {
+  mainEl().querySelectorAll('.qnav-item').forEach((el) => {
     el.addEventListener('click', () => {
-      const opt = q.options[Number(el.dataset.optionIndex)];
-      selectAnswer(q.id, opt);
+      state.studentQuestionIndex = Number(el.dataset.jumpIndex);
+      renderStudentQuiz();
     });
   });
 
-  document.getElementById('hint-lamp-btn').addEventListener('click', () => {
-    if (state.studentHintsUsed[q.id]) return; // one-way - already on, nothing to toggle off
-    state.studentHintsUsed[q.id] = true;
-    showToast('Hint shown - this question now worth half credit', 'warn');
-    renderStudentQuiz();
-  });
+  if (q.type === 'sentence_reorder') bindReorderEvents(q);
+  else bindMultipleChoiceEvents(q);
+
+  const hintBtn = document.getElementById('hint-lamp-btn');
+  if (!answered) {
+    hintBtn.addEventListener('click', () => {
+      if (state.studentHintsUsed[q.id]) return;
+      state.studentHintsUsed[q.id] = true;
+      showToast('Hint shown - question now worth half credit', 'warn');
+      renderStudentQuiz();
+    });
+  }
 
   if (timeLimitSeconds > 0) startQuizTimer(timeLimitSeconds, isLast);
 }
 
-// Ticks the visible countdown for the WHOLE quiz. Reads the fixed
-// studentQuizStartedAt stamped at join time rather than counting its
-// own elapsed time, so re-renders (selecting an option, moving
-// between questions, using a hint) never reset or double-count the
-// clock - it's the same clock from the first question to the last.
+function renderMultipleChoiceArea(q, hintUsed) {
+  const currentAnswer = state.studentAnswers[q.id];
+  const currentValue = currentAnswer ? currentAnswer.value : undefined;
+  const showOptionMeanings = hintUsed && !!q.optionMeanings;
+  // "locked" only kicks in once the answer has actually been checked -
+  // before that, the student can freely tap a different option.
+  const checked = !!(currentAnswer && currentAnswer.checked);
+  const checking = !!(currentAnswer && currentAnswer.checking);
+
+  const optionsHtml = q.options.map((opt, idx) => {
+    let feedbackClass = '';
+    let feedbackIcon = '';
+    if (checked && currentValue === opt) {
+      feedbackClass = currentAnswer.correct === true ? 'answered-correct' : 'answered-incorrect';
+      feedbackIcon = `<span class="option-mark">${icon(currentAnswer.correct === true ? 'check' : 'x', 16)}</span>`;
+    } else if (checking && currentValue === opt) {
+      feedbackClass = 'checking';
+    }
+    return `
+    <div class="option ${currentValue === opt ? 'selected' : ''} ${feedbackClass} ${checked || checking ? 'locked' : ''}" data-option-index="${idx}">
+      <span class="option-marker"></span>
+      <span>
+        <span>${escapeHtml(opt)}</span>
+        ${showOptionMeanings ? `<span class="option-meaning">${escapeHtml(q.optionMeanings[idx])}</span>` : ''}
+      </span>
+      ${feedbackIcon}
+    </div>`;
+  }).join('');
+
+  return `<div class="option-list">${optionsHtml}</div>`;
+}
+
+function bindMultipleChoiceEvents(q) {
+  const currentAnswer = state.studentAnswers[q.id];
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+  mainEl().querySelectorAll('.option').forEach((el) => {
+    el.addEventListener('click', () => {
+      const opt = q.options[Number(el.dataset.optionIndex)];
+      selectOption(q.id, opt);
+    });
+  });
+}
+
+// Picking an option just records it as the pending choice - no server
+// round trip, no lock. The student can tap a different option as many
+// times as they like until they press "Check answer".
+function selectOption(questionId, value) {
+  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+  const hintUsed = !!state.studentHintsUsed[questionId];
+  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
+  renderStudentQuiz();
+}
+
+function renderReorderArea(q) {
+  const currentAnswer = state.studentAnswers[q.id];
+  const checked = !!(currentAnswer && currentAnswer.checked);
+  const checking = !!(currentAnswer && currentAnswer.checking);
+  const placed = currentAnswer ? currentAnswer.value : (state.studentReorderProgress[q.id] || []);
+  const placedSet = new Set(placed);
+  const pool = q.chunks.filter((c) => !placedSet.has(c.id));
+
+  let assembledFeedbackClass = '';
+  if (checked) {
+    assembledFeedbackClass = currentAnswer.correct === true ? 'answered-correct' : 'answered-incorrect';
+  } else if (checking) {
+    assembledFeedbackClass = 'checking';
+  }
+
+  const chip = (chunk, kind) => `<div class="reorder-chip ${checked || checking ? 'locked' : ''}" data-chunk-id="${chunk.id}" data-chip-kind="${kind}">${escapeHtml(chunk.text)}</div>`;
+
+  const assembledIcon = checked
+    ? `<span class="option-mark">${icon(currentAnswer.correct === true ? 'check' : 'x', 16)}</span>`
+    : '';
+
+  return `
+    <div class="reorder-assembled ${assembledFeedbackClass}" id="reorder-assembled">
+      ${placed.length === 0
+        ? `<span class="reorder-placeholder">Tap words in order to build sentence</span>`
+        : placed.map((id) => chip(q.chunks.find((c) => c.id === id), 'assembled')).join('')}
+      ${assembledIcon}
+    </div>
+    <div class="reorder-pool" id="reorder-pool">
+      ${pool.map((c) => chip(c, 'pool')).join('')}
+    </div>
+    ${placed.length > 0 && !checked && !checking ? `<button type="button" class="muted-link" id="reorder-clear-btn" style="margin-top:8px;">Clear</button>` : ''}
+  `;
+}
+
+function bindReorderEvents(q) {
+  const total = q.chunks.length;
+  const currentAnswer = state.studentAnswers[q.id];
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+
+  mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.chunkId);
+      const placed = [...(state.studentReorderProgress[q.id] || []), id];
+      if (placed.length === total) {
+        // Fully assembled - becomes the pending answer, not checked yet.
+        // The student can still hit Clear to rebuild it before checking.
+        delete state.studentReorderProgress[q.id];
+        const answeredAtMs = Date.now() - state.studentQuizStartedAt;
+        const hintUsed = !!state.studentHintsUsed[q.id];
+        state.studentAnswers[q.id] = { value: placed, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
+      } else {
+        state.studentReorderProgress[q.id] = placed;
+      }
+      renderStudentQuiz();
+    });
+  });
+
+  mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.chunkId);
+      // If this was already the (unchecked) pending answer, tapping a
+      // chip pulls it back out into the pool instead of clearing everything.
+      const placed = (currentAnswer && !currentAnswer.checked ? currentAnswer.value : state.studentReorderProgress[q.id]) || [];
+      const next = placed.filter((x) => x !== id);
+      if (currentAnswer && !currentAnswer.checked) delete state.studentAnswers[q.id];
+      state.studentReorderProgress[q.id] = next;
+      renderStudentQuiz();
+    });
+  });
+
+  const clearBtn = document.getElementById('reorder-clear-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      delete state.studentReorderProgress[q.id];
+      delete state.studentAnswers[q.id];
+      renderStudentQuiz();
+    });
+  }
+}
+
 function startQuizTimer(timeLimitSeconds, isLast) {
   const limitMs = timeLimitSeconds * 1000;
 
@@ -806,8 +1250,6 @@ function startQuizTimer(timeLimitSeconds, isLast) {
     const valueEl = document.getElementById('timer-value');
     const fillEl = document.getElementById('timer-fill');
     if (!valueEl || !fillEl) {
-      // Navigated to a different route entirely - nothing left to
-      // update, stop ticking.
       clearQuizTimer();
       return;
     }
@@ -825,8 +1267,6 @@ function startQuizTimer(timeLimitSeconds, isLast) {
   quizTimerInterval = setInterval(tick, 250);
 }
 
-// A short burst of emoji flying outward from an element - the
-// "cheerful explosion" for a correct answer.
 function explodeAt(el, emojis, count) {
   if (!el) return;
   const rect = el.getBoundingClientRect();
@@ -852,8 +1292,6 @@ function explodeAt(el, emojis, count) {
   setTimeout(() => container.remove(), 900);
 }
 
-// A single sad emoji that drops and fades - the gentler "aww" cue for
-// a wrong answer, paired with the low buzz tone.
 function sadPopAt(el) {
   if (!el) return;
   const rect = el.getBoundingClientRect();
@@ -866,27 +1304,26 @@ function sadPopAt(el) {
   setTimeout(() => span.remove(), 850);
 }
 
-async function selectAnswer(questionId, value) {
-  const answeredAtMs = Date.now() - state.studentQuizStartedAt;
-  const hintUsed = !!state.studentHintsUsed[questionId];
+// Sends the pending answer to the server and reveals right/wrong on
+// screen. This only fires once the student has committed to an
+// answer by pressing "Check answer" - not the moment they tap an
+// option - so the correct/incorrect icon never appears early.
+async function confirmCurrentAnswer(questionId) {
+  const pending = state.studentAnswers[questionId];
+  if (!pending || pending.checked || pending.checking) return;
+  const { value, usedMeaning, answeredAtMs } = pending;
 
-  // Optimistic local update so the option highlights and pulses
-  // ("checking...") right away, instead of sitting still until the
-  // network round trip finishes - the correct/incorrect payoff still
-  // waits on the server (it holds the answer key, the client never
-  // does), but the wait itself now visibly acknowledges the tap.
-  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null };
+  // Optimistic "checking" state so the UI can show a pulse while waiting.
+  state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct: null, checked: false, checking: true };
   renderStudentQuiz();
 
   let correct = null;
   try {
-    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, hintUsed, answeredAtMs);
+    const res = await Api.checkAnswer(state.studentAttemptId, questionId, value, usedMeaning, answeredAtMs, state.studentQuiz.id);
     correct = res.correct;
-  } catch (err) {
-    // Network hiccup - the answer is still recorded locally and still
-    // counts at final submit, it just won't animate right now.
-  }
-  state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct };
+  } catch (err) {}
+
+  state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct, checked: true };
 
   if (correct === true) {
     state.studentStreak += 1;
@@ -903,19 +1340,34 @@ async function selectAnswer(questionId, value) {
     playIncorrectSound();
   }
 
-  // Only re-render + fire the effect if the student is still looking
-  // at this question - they may have already clicked Next.
   if (state.studentQuiz.questions[state.studentQuestionIndex].id === questionId) {
     renderStudentQuiz();
-    const el = mainEl().querySelector('.option.selected');
+    const q = state.studentQuiz.questions.find((qq) => qq.id === questionId);
+    const el = q.type === 'sentence_reorder'
+      ? document.getElementById('reorder-assembled')
+      : mainEl().querySelector('.option.selected');
     if (correct === true) explodeAt(el, ['🎉', '✨', '⭐', '🎊'], 14);
     else if (correct === false) sadPopAt(el);
   }
 }
 
-function studentNext() {
-  state.studentQuestionIndex++;
-  renderStudentQuiz();
+// The single primary button on the quiz screen. First press on a
+// freshly-picked answer checks it; press it again (or press it with
+// nothing picked) and it moves on, submitting on the last question.
+async function studentCheckOrAdvance() {
+  const q = state.studentQuiz.questions[state.studentQuestionIndex];
+  const current = state.studentAnswers[q.id];
+  if (current && !current.checked) {
+    await confirmCurrentAnswer(q.id);
+    return;
+  }
+  const isLast = state.studentQuestionIndex === state.studentQuiz.questions.length - 1;
+  if (isLast) {
+    studentSubmit();
+  } else {
+    state.studentQuestionIndex++;
+    renderStudentQuiz();
+  }
 }
 
 function studentPrev() {
@@ -939,7 +1391,9 @@ function renderStudentDone() {
     <div style="text-align:center; padding-top: 30px;">
       <div class="title-reveal ${isTopTitle ? 'title-reveal-top' : ''}">
         <div class="title-reveal-label">You are</div>
-        <div class="title-reveal-name">${escapeHtml(result.title)}</div>
+        <div class="title-reveal-icon">${icon(result.title.icon, 34)}</div>
+        <div class="title-reveal-name">${escapeHtml(result.title.name)} <span class="title-reveal-pinyin">(${escapeHtml(result.title.pinyin)})</span></div>
+        <div class="title-reveal-meaning">${escapeHtml(result.title.meaning)}</div>
       </div>
 
       <div class="score-pair" style="margin:22px 0 20px;">
@@ -957,17 +1411,52 @@ function renderStudentDone() {
       </div>
 
       <h2>Quiz submitted</h2>
-      <p>
-        Your teacher can see your result now.
-        ${result.longestStreak >= 3 ? ` Best streak: ${result.longestStreak} in a row.` : ''}
-        ${result.meaningUsedCount ? ` Meaning was shown on ${result.meaningUsedCount} question${result.meaningUsedCount === 1 ? '' : 's'}, so those only earned half credit if correct.` : ''}
-      </p>
-      <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      <p>Your teacher can see your result now.</p>
+      <div style="display:flex; gap:8px; justify-content:center;">
+        ${result.review ? `<button class="btn btn-primary" onclick="go('student/review')">${icon('paper')} Review my answers</button>` : ''}
+        <button class="btn btn-ghost" onclick="go('')">${icon('arrowLeft')} Back home</button>
+      </div>
     </div>
   `;
 
-  // A little fanfare when the title lands - bigger sting for the top
-  // title (a genuinely flawless run) than an ordinary finish.
   if (isTopTitle) playStreakSound(10);
   else playCorrectSound();
+}
+
+// A student's own answer review right after finishing - same idea as
+// the teacher's per-attempt review, but built entirely from the
+// `review` array the submit response already included, so it needs
+// no extra request.
+function renderStudentReview() {
+  const result = state.studentResult;
+  if (!result || !result.review) return go('');
+
+  const linesHtml = result.review.map((r) => {
+    let givenText, correctText;
+    if (r.type === 'sentence_reorder') {
+      givenText = Array.isArray(r.given) ? r.given.map((id) => r.chunkLabels[id]).join(' ') : '(no answer)';
+      correctText = r.correctAnswer.join(' ');
+    } else {
+      givenText = r.given ?? '(no answer)';
+      correctText = r.correctAnswer;
+    }
+    return `
+      <div class="answer-line">
+        <span class="mark ${r.correct ? 'correct' : 'incorrect'}">${icon(r.correct ? 'check' : 'x', 15)}</span>
+        <div>
+          <div>${escapeHtml(r.question)}</div>
+          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
+            Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  mainEl().innerHTML = `
+    <button class="muted-link" style="margin-bottom: 18px;" onclick="go('student/done')">${icon('arrowLeft')} Back to results</button>
+    <h1>Your answers</h1>
+    <p>${result.accuracyScore}% correct · ${result.review.filter((r) => r.correct).length} of ${result.review.length} questions</p>
+    <div class="answer-review" style="border-top:none; margin-top:0; padding-top:0;">${linesHtml}</div>
+    <button class="btn btn-ghost" style="margin-top:20px;" onclick="go('')">${icon('arrowLeft')} Back home</button>
+  `;
 }

@@ -58,15 +58,24 @@ function quizFromRow(row, questionRows = []) {
 }
 
 function questionFromRow(row) {
-  return {
+  const base = {
     id: row.id,
-    type: 'multiple_choice',
+    type: row.type || 'multiple_choice',
     question: row.question,
     questionMeaning: row.question_meaning || undefined,
+    points: Number(row.points),
+  };
+  if (base.type === 'sentence_reorder') {
+    // `options` holds the chunks in their CORRECT order for this
+    // type - see supabase/schema.sql. Shuffling for display happens
+    // only in toStudentView() in server.js, never here.
+    return { ...base, chunks: row.options };
+  }
+  return {
+    ...base,
     options: row.options,
     optionMeanings: row.option_meanings || undefined,
     answer: row.answer,
-    points: Number(row.points),
   };
 }
 
@@ -106,14 +115,27 @@ async function createQuiz(quiz) {
     id: q.id,
     quiz_id: quiz.id,
     position: i,
+    type: q.type || 'multiple_choice',
     question: q.question,
     question_meaning: q.questionMeaning || null,
-    options: q.options,
+    options: q.type === 'sentence_reorder' ? q.chunks : q.options,
     option_meanings: q.optionMeanings || null,
-    answer: q.answer,
+    answer: q.type === 'sentence_reorder' ? null : q.answer,
     points: q.points,
   }));
-  unwrap(await supabase.from('questions').insert(questionRows));
+
+  // These are two separate inserts, not one transaction - if the
+  // second one fails, the quiz row from the first would otherwise be
+  // left behind with a working join code and zero questions, which
+  // crashes the student page rather than failing loudly at creation
+  // time. Clean up on any failure here instead of leaving that ghost
+  // quiz around.
+  try {
+    unwrap(await supabase.from('questions').insert(questionRows));
+  } catch (err) {
+    await supabase.from('quizzes').delete().eq('id', quiz.id);
+    throw err;
+  }
   return getQuizById(quiz.id);
 }
 
@@ -141,9 +163,15 @@ async function listQuizzes() {
 }
 
 async function getQuizById(id) {
-  const quizRow = unwrap(await supabase.from('quizzes').select('*').eq('id', id).maybeSingle());
+  // The quiz row and its questions don't depend on each other, so
+  // fetch them at the same time instead of one after another - this
+  // alone roughly halves the latency of every quiz read, which
+  // matters a lot given how often it's called (every answer check).
+  const [quizRow, questionRows] = await Promise.all([
+    supabase.from('quizzes').select('*').eq('id', id).maybeSingle().then(unwrap),
+    supabase.from('questions').select('*').eq('quiz_id', id).then(unwrap),
+  ]);
   if (!quizRow) return null;
-  const questionRows = unwrap(await supabase.from('questions').select('*').eq('quiz_id', id));
   return quizFromRow(quizRow, questionRows);
 }
 
@@ -152,6 +180,23 @@ async function findQuizByCode(code) {
   if (!quizRow) return null;
   const questionRows = unwrap(await supabase.from('questions').select('*').eq('quiz_id', quizRow.id));
   return quizFromRow(quizRow, questionRows);
+}
+
+// Overwrites the editable fields of existing questions (text, options,
+// correct answer, or reorder chunks) without touching their id,
+// position, or points - used by the teacher's "edit questions" page.
+async function updateQuestions(quizId, questions) {
+  await Promise.all(questions.map((q) => {
+    const patch = {
+      question: q.question,
+      question_meaning: q.questionMeaning || null,
+      options: q.type === 'sentence_reorder' ? q.chunks : q.options,
+      option_meanings: q.optionMeanings || null,
+      answer: q.type === 'sentence_reorder' ? null : q.answer,
+    };
+    return supabase.from('questions').update(patch).eq('id', q.id).eq('quiz_id', quizId).then(unwrap);
+  }));
+  return getQuizById(quizId);
 }
 
 async function deleteQuiz(id) {
@@ -264,6 +309,7 @@ module.exports = {
   findQuizByCode,
   deleteQuiz,
   updateQuizSettings,
+  updateQuestions,
   createAttempt,
   getAttemptById,
   hasCompletedAttempt,
