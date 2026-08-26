@@ -14,15 +14,17 @@
 // app - everything else renders as ordinary answer buttons.
 const QUESTION_KINDS = [
   {
-    id: 'fill_blank',
-    label: 'Fill in the blank',
-    hint: 'A Hanzi sentence with a word blanked out.',
-    defaultOn: true,
-    instructions: `FILL IN THE BLANK ("type": "multiple_choice") - a Hanzi sentence with one word or phrase blanked out (use ___ for the blank). All options are candidate Hanzi + pinyin to fill the blank. Options and the question itself use ONLY Hanzi and pinyin - no English anywhere in "question" or "options".
-PINYIN IS REQUIRED IN THE SENTENCE ITSELF, not just in the options: write pinyin in parentheses directly after every word or short phrase in the sentence, the same way it's done in the options - e.g. 他 (tā) 晚上 (wǎnshang) 先 (xiān) 吃饭 (chīfàn)，然后 (ránhòu) ___。 A sentence with Hanzi but no pinyin anywhere is wrong - annotate the whole thing, word by word, not just near the blank.
+  id: 'fill_blank',
+  label: 'Fill in the blank',
+  hint: 'A Hanzi sentence with a word blanked out.',
+  defaultOn: true,
+  instructions: `FILL IN THE BLANK ("type": "multiple_choice") - a Hanzi sentence with exactly one word or phrase replaced by the blank marker "___". The blank must contain ONLY "___" and NOTHING ELSE. NEVER put the correct answer, pinyin, or any other text inside or immediately after the blank. For example, "我 (wǒ) ___ 数学 (shùxué) 作业 (zuòyè)。" is correct; "我 (wǒ) ___ (méi zuò wán) 数学 (shùxué) 作业 (zuòyè)。" is WRONG because the answer is revealed in the question.
+All options are candidate Hanzi + pinyin to fill the blank. Options use Hanzi + pinyin only. The question itself uses Hanzi + pinyin for every visible word or short phrase EXCEPT the blank marker "___", which must never have pinyin or an answer attached to it.
+PINYIN IS REQUIRED FOR EVERY VISIBLE HANZI WORD OR SHORT PHRASE IN THE SENTENCE, but NEVER for "___". Annotate the sentence word by word, leaving the blank completely empty.
+IMPORTANT: the correct answer must appear ONLY in the "options" and "answer" fields, never in the "question" field. The question must give the student no visual clue that reveals which option is correct.
 IMPORTANT: do not copy a sentence straight out of the material. Write a NEW sentence of your own, in a different context, that uses the same word or grammar point the material taught.
-Example: if the material taught 做功课 (zuò gōngkè) in the sentence "我每天做功课 (wǒ měitiān zuò gōngkè)", don't reuse that sentence - write something like "他 (tā) 晚上 (wǎnshang) 一般 (yìbān) 先 (xiān) 吃饭 (chīfàn)，然后 (ránhòu) ___。" instead, with every word pinyin-annotated.`,
-  },
+Example: if the material taught 做功课 (zuò gōngkè) in the sentence "我每天做功课 (wǒ měitiān zuò gōngkè)", don't reuse that sentence - write something like "他 (tā) 晚上 (wǎnshang) 一般 (yìbān) 先 (xiān) 吃饭 (chīfàn)，然后 (ránhòu) ___。" instead, with every visible word pinyin-annotated and the blank left completely empty.`,
+},
   {
     id: 'guess_hanzi',
     label: 'English -> Mandarin',
@@ -122,6 +124,7 @@ Write every question as one of these kinds, mixed across the quiz (roughly evenl
 ${kindInstructions}
 
 Other language rules - read carefully:
+- For Fill in the blank questions, "___" is a protected blank marker: NEVER append pinyin, Hanzi, the correct answer, parentheses, or any other text to it. The blank must remain exactly "___" in the question. The missing word or phrase may appear only in "options" and "answer".
 - Outside of English -> Mandarin (question in English) and What does it mean (options in English), never put English inside "question" or "options" - Hanzi with pinyin only, like 汉字 (hànzì).
 - Include "questionMeaning" as an English translation wherever the question itself is in Hanzi - the app hides this behind a hint button the student can choose to tap. Omit "questionMeaning" only when the question is already in plain English.
 - "optionMeanings" only applies to multiple_choice kinds whose options are Hanzi (Fill in the blank, English -> Mandarin, Conversation reply, Reorder does not use it at all). Omit it for kinds where the options are already English or Indonesian.
