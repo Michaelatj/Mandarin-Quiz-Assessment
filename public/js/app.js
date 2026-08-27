@@ -69,6 +69,21 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
+// Text-to-speech - used by the "listening dictation" question type.
+// Browser-native, no audio files and no server round trip.
+// ---------------------------------------------------------------------
+function speakMandarin(text) {
+  if (!('speechSynthesis' in window) || !text) return;
+  window.speechSynthesis.cancel(); // stop any utterance already in flight
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'zh-CN';
+  // Slightly below natural speed - this is for a learner catching
+  // individual syllables, not native-speed listening practice.
+  utter.rate = 0.85;
+  window.speechSynthesis.speak(utter);
+}
+
+// ---------------------------------------------------------------------
 // Toasts
 // ---------------------------------------------------------------------
 let toastTimeout = null;
@@ -792,11 +807,18 @@ function qeditCardHtml(q, qi) {
       </div>
     </div>`;
   }
+  // Covers both multiple_choice and listening_dictation - they share
+  // the same options/answer editing UI. data-question-type is read
+  // from the actual question type (not hardcoded) so a listening
+  // question stays a listening question after a save.
   return `
-  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="multiple_choice">
-    <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span></div>
+  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="${q.type}">
+    <div class="qedit-head">
+      <span class="qedit-number">Q${qi + 1}</span>
+      ${q.type === 'listening_dictation' ? '<span class="badge">Listening</span>' : ''}
+    </div>
     <div class="field">
-      <label>Question</label>
+      <label>Question${q.type === 'listening_dictation' ? ' (shown before the audio plays)' : ''}</label>
       <input class="input qedit-question" value="${escapeHtml(q.question)}" />
     </div>
     <div class="field">
@@ -804,7 +826,7 @@ function qeditCardHtml(q, qi) {
       <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
     </div>
     <div class="field" style="margin-bottom:0;">
-      <label>Options - the selected dot is the correct answer</label>
+      <label>Options - the selected dot is the correct answer${q.type === 'listening_dictation' ? ', and the text spoken aloud' : ''}</label>
       <div class="qedit-option-list">
         ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer)).join('')}
       </div>
@@ -1022,7 +1044,11 @@ function renderStudentQuiz() {
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
   const answered = !!state.studentAnswers[q.id];
 
-  const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
+  const answerAreaHtml = q.type === 'sentence_reorder'
+    ? renderReorderArea(q)
+    : q.type === 'listening_dictation'
+      ? renderListeningArea(q, hintUsed)
+      : renderMultipleChoiceArea(q, hintUsed);
 
   // Two-step answering: picking an option only highlights it and can
   // still be changed. The first press of the primary button checks it
@@ -1095,6 +1121,7 @@ function renderStudentQuiz() {
 
   if (q.type === 'sentence_reorder') bindReorderEvents(q);
   else bindMultipleChoiceEvents(q);
+  if (q.type === 'listening_dictation') bindListeningEvents(q);
 
   const hintBtn = document.getElementById('hint-lamp-btn');
   if (!answered) {
@@ -1160,6 +1187,32 @@ function selectOption(questionId, value) {
   const hintUsed = !!state.studentHintsUsed[questionId];
   state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
   renderStudentQuiz();
+}
+
+// Listening dictation - a "Play audio" button on top of the ordinary
+// multiple-choice option list. The target text is never shown as
+// text; the student only ever hears it via speechSynthesis and picks
+// the matching option, so this reuses renderMultipleChoiceArea and
+// bindMultipleChoiceEvents underneath rather than duplicating them.
+function renderListeningArea(q, hintUsed) {
+  return `
+    <div class="listening-audio-row">
+      <button type="button" class="btn btn-ghost btn-sm" id="listen-play-btn">🔊 Play audio</button>
+      <span class="muted-link" style="font-size:13px;">Tap as many times as you need</span>
+    </div>
+    ${renderMultipleChoiceArea(q, hintUsed)}
+  `;
+}
+
+function bindListeningEvents(q) {
+  const playBtn = document.getElementById('listen-play-btn');
+  const speak = () => speakMandarin(q.audioText);
+  if (playBtn) playBtn.addEventListener('click', speak);
+  // Auto-play once when the question first loads, so the student
+  // doesn't have to tap before hearing anything. Skipped once an
+  // answer already exists, so re-renders (picking an option, showing
+  // the hint) don't replay it on top of itself.
+  if (!state.studentAnswers[q.id]) speak();
 }
 
 function renderReorderArea(q) {
