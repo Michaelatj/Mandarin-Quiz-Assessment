@@ -12,6 +12,10 @@
 // sentence_reorder, which has its own JSON shape (see the shape
 // block inside buildQuizPrompt) and its own drag-to-order UI in the
 // app - everything else renders as ordinary answer buttons.
+// listening_dictation is a special case: it reuses the
+// multiple_choice JSON shape exactly (same fields, same grading) but
+// with "type": "listening_dictation" instead, since the app hides
+// the target text and speaks it aloud instead of showing it.
 const QUESTION_KINDS = [
   {
     id: 'fill_blank',
@@ -63,6 +67,14 @@ Example: question "A：你想喝什么？(nǐ xiǎng hē shénme?)", options inc
     instructions: `REORDER THE SENTENCE ("type": "sentence_reorder", NOT "multiple_choice" - this kind has its own JSON shape, shown separately below) - give a correct Hanzi sentence broken into 4-7 word/phrase chunks, listed in their CORRECT reading order (the app shuffles them for the student - never shuffle them yourself). Each chunk is one word or short phrase with its pinyin, formatted exactly like an option elsewhere: "chunk (pīnyīn)". Write a NEW sentence, not one copied verbatim from the material, that uses a grammar point or vocabulary word the material taught.
 Example: for the sentence 我明天要去学校 (I have to go to school tomorrow), chunks (in correct order) would be: ["我 (wǒ)", "明天 (míngtiān)", "要 (yào)", "去 (qù)", "学校 (xuéxiào)"].`,
   },
+  {
+    id: 'listening_dictation',
+    label: 'Listening dictation',
+    hint: 'Student hears the sentence spoken aloud and picks the matching Hanzi.',
+    defaultOn: false,
+    instructions: `LISTENING DICTATION ("type": "listening_dictation", uses the SAME JSON shape as multiple_choice above) - the student never sees the Hanzi text up front; the app speaks it aloud instead, and the student picks which option matches what they heard. Set "question" to a short fixed English instruction, always exactly "Listen and select what you hear." - do not put the Hanzi sentence in "question", it would give the answer away before the audio plays. "options" are candidate Hanzi + pinyin sentences (keep each option short - one clause or a single sentence, not a paragraph), one of which - copied exactly into "answer" - is what actually gets spoken to the student. Distractors should sound plausibly similar when spoken (a similar sentence pattern, an easily mixed-up word, a tone pair a beginner might mishear), not wildly different sentences.
+Example: options include "我 (wǒ) 想 (xiǎng) 喝 (hē) 水 (shuǐ)。" as the answer plus distractors like "我 (wǒ) 想 (xiǎng) 喝 (hē) 茶 (chá)。" (a plausible mishearing) and "我们 (wǒmen) 想 (xiǎng) 喝 (hē) 水 (shuǐ)。" (singular/plural mix-up).`,
+  },
 ];
 
 const DEFAULT_KIND_IDS = QUESTION_KINDS.filter((k) => k.defaultOn).map((k) => k.id);
@@ -70,6 +82,7 @@ const DEFAULT_KIND_IDS = QUESTION_KINDS.filter((k) => k.defaultOn).map((k) => k.
 function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
   const kinds = QUESTION_KINDS.filter((k) => kindIds.includes(k.id));
   const hasReorder = kinds.some((k) => k.id === 'sentence_reorder');
+  const hasListening = kinds.some((k) => k.id === 'listening_dictation');
   const otherKinds = kinds.filter((k) => k.id !== 'sentence_reorder');
 
   const kindsList = kinds.map((k) => k.label).join(', ') || 'a mix of question styles';
@@ -95,9 +108,17 @@ function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
   const shapes = [multipleChoiceShape];
   if (hasReorder) shapes.push(reorderShape);
 
-  const shapeExplainer = hasReorder
-    ? `Every question in "questions" is one of the JSON shapes above depending on its kind: use the "multiple_choice" shape for every kind below except Reorder the sentence, which uses the "sentence_reorder" shape instead (it has no "options" or "answer" field - "chunks" replaces both).`
-    : `Every question in "questions" uses the "multiple_choice" shape above.`;
+  // listening_dictation deliberately doesn't get its own shape block -
+  // it's structurally identical to multiple_choice, so it only needs
+  // a one-line note telling the model to swap the "type" value.
+  const shapeExplainer = [
+    hasReorder
+      ? `Use the "sentence_reorder" shape for Reorder the sentence (it has no "options" or "answer" field - "chunks" replaces both); use the "multiple_choice" shape for every other kind below.`
+      : `Every question in "questions" uses the "multiple_choice" shape above.`,
+    hasListening
+      ? `For Listening dictation specifically, use the "multiple_choice" shape's fields exactly, but set "type" to "listening_dictation" instead of "multiple_choice".`
+      : '',
+  ].filter(Boolean).join(' ');
 
   const kindInstructions = kinds
     .map((k, i) => `${i + 1}. ${k.instructions}`)
