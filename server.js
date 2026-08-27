@@ -41,7 +41,14 @@ app.post('/api/login', (req, res) => {
   res.json({ ok: true });
 });
 
-const QUESTION_TYPES = ['multiple_choice', 'sentence_reorder'];
+// "listening_dictation" is deliberately NOT a third fully separate
+// shape like sentence_reorder - it stores exactly the same fields as
+// multiple_choice (options/optionMeanings/answer) and is graded the
+// same way. The only place it behaves differently is toStudentView,
+// which hands the client a pinyin-stripped copy of the answer as
+// "audioText" for the browser to speak aloud, since the student is
+// never shown the target text directly for this type.
+const QUESTION_TYPES = ['multiple_choice', 'sentence_reorder', 'listening_dictation'];
 
 function validateQuiz(payload) {
   const errors = [];
@@ -64,7 +71,11 @@ function normalizeQuiz(payload) {
     timeLimitSeconds: 0,
     allowRetakes: true,
     questions: payload.questions.map((q) => {
-      const type = q.type === 'sentence_reorder' ? 'sentence_reorder' : 'multiple_choice';
+      const type = q.type === 'sentence_reorder'
+        ? 'sentence_reorder'
+        : q.type === 'listening_dictation'
+          ? 'listening_dictation'
+          : 'multiple_choice';
       const base = {
         id: nanoid(8),
         type,
@@ -127,7 +138,19 @@ function toStudentView(quiz) {
         return { id: q.id, type: q.type, question: hide ? stripPinyin(q.question) : q.question, questionMeaning: q.questionMeaning, chunks: shuffledChunks };
       }
       const picked = pickDisplayOptions(q);
-      return { id: q.id, type: q.type, question: hide ? stripPinyin(q.question) : q.question, questionMeaning: q.questionMeaning, options: hide ? picked.options.map(stripPinyin) : picked.options, optionMeanings: picked.optionMeanings };
+      return {
+        id: q.id,
+        type: q.type,
+        question: hide ? stripPinyin(q.question) : q.question,
+        questionMeaning: q.questionMeaning,
+        options: hide ? picked.options.map(stripPinyin) : picked.options,
+        optionMeanings: picked.optionMeanings,
+        // Always pinyin-stripped, regardless of the hidePinyin setting -
+        // this is fed straight to speechSynthesis, and reading "(nǐ)"
+        // aloud as literal parenthesis-wrapped text sounds wrong no
+        // matter what the pinyin display setting is.
+        ...(q.type === 'listening_dictation' ? { audioText: stripPinyin(q.answer) } : {}),
+      };
     }),
   };
 }
