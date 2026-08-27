@@ -750,6 +750,16 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 
 .option-list { display: flex; flex-direction: column; gap: 8px; }
 
+/* Listening dictation - the "Play audio" row sits above the ordinary
+   option list, since the question itself renders through
+   renderMultipleChoiceArea underneath it. */
+.listening-audio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
 /* Sentence-reorder: tap-to-build chip UI. Assembled row is where the
    sentence takes shape; pool holds whatever hasn't been placed yet. */
 .reorder-assembled {
