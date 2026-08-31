@@ -26,6 +26,38 @@ function clearQuizTimer() {
 }
 
 // ---------------------------------------------------------------------
+// JSON sanitization helper
+// ---------------------------------------------------------------------
+function cleanAndParseQuizJson(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') {
+    throw new Error('Please paste your quiz JSON into the text area.');
+  }
+
+  let cleaned = rawInput.trim();
+
+  // Strip markdown code fences if provided by LLM (```json ... ``` or ``` ... ```)
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  }
+
+  // Find outermost curly braces to ignore any accidental text before/after JSON
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    throw new Error('Could not find a valid JSON object structure { ... } in the pasted text.');
+  }
+
+  cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    throw new Error(`JSON syntax error: ${err.message}. Ensure double quotes inside values are properly escaped or replaced with single quotes.`);
+  }
+}
+
+// ---------------------------------------------------------------------
 // Sound effects
 // ---------------------------------------------------------------------
 let audioCtx = null;
@@ -74,11 +106,9 @@ function playStreakSound(streak) {
 // ---------------------------------------------------------------------
 function speakMandarin(text) {
   if (!('speechSynthesis' in window) || !text) return;
-  window.speechSynthesis.cancel(); // stop any utterance already in flight
+  window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'zh-CN';
-  // Slightly below natural speed - this is for a learner catching
-  // individual syllables, not native-speed listening practice.
   utter.rate = 0.85;
   window.speechSynthesis.speak(utter);
 }
@@ -379,10 +409,6 @@ async function renderTeacher(rest) {
   return renderTeacherDashboard();
 }
 
-// Module-level so a checkbox toggle or the select-mode toggle itself
-// can re-render just the list locally (renderDashboardList) without
-// refetching from the API - only a fresh page load (renderTeacherDashboard)
-// resets these back to "off".
 let quizSelectMode = false;
 let selectedQuizIds = new Set();
 let dashboardQuizzesCache = [];
@@ -414,9 +440,6 @@ async function renderTeacherDashboard() {
   renderDashboardList();
 }
 
-// Rebuilds just the list + bulk-action bar from dashboardQuizzesCache -
-// called on every checkbox toggle and select-mode flip, entirely
-// client-side, no API round trip.
 function renderDashboardList() {
   const container = document.getElementById('quiz-list-container');
   const bulkBar = document.getElementById('dash-bulk-bar');
@@ -463,10 +486,6 @@ function renderDashboardList() {
     </div>
   `;
 
-  // The checkbox is a plain styled <span>, not a real <input> - so
-  // there's only ever one click handler per card (this one) instead
-  // of a card handler AND a checkbox handler firing on the same
-  // click and toggling the selection twice.
   container.querySelectorAll('.list-card').forEach((card) => {
     card.addEventListener('click', () => {
       const id = card.dataset.quizId;
@@ -488,10 +507,6 @@ async function bulkDeleteSelectedQuizzes() {
   renderTeacherDashboard();
 }
 
-// ---------------------------------------------------------------------
-// Modal - small centered dialog with a dimmed backdrop. Click the
-// backdrop or press Escape to dismiss.
-// ---------------------------------------------------------------------
 function modalEscHandler(e) {
   if (e.key === 'Escape') closeModal();
 }
@@ -523,8 +538,6 @@ function openModal(innerHtml, { onMount } = {}) {
   if (onMount) onMount(overlay);
 }
 
-// Edit quiz title - opens a small modal with the current name
-// pre-filled and selected, ready to type over.
 function editQuizTitle(btn) {
   const quizId = btn.dataset.quizId;
   const currentTitle = btn.dataset.quizTitle;
@@ -656,13 +669,16 @@ function renderTeacherNewQuiz() {
     e.preventDefault();
     const errorEl = document.getElementById('quiz-error');
     errorEl.innerHTML = '';
+    
     let parsed;
     try {
-      parsed = JSON.parse(document.getElementById('quiz-json').value);
+      const rawText = document.getElementById('quiz-json').value;
+      parsed = cleanAndParseQuizJson(rawText);
     } catch (err) {
-      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option - that breaks the format.';
+      errorEl.textContent = err.message;
       return;
     }
+
     try {
       const quiz = await Api.createQuiz(parsed);
       go(`teacher/quiz/${quiz.id}`);
@@ -829,19 +845,8 @@ function toggleReview(id) {
 
 // ---------------------------------------------------------------------
 // Teacher: edit questions & answers
-// This is also the closest thing to a full "answer key" page - every
-// question is shown with its correct answer already selected, so a
-// teacher scanning the page sees the whole quiz + key even before
-// changing anything.
 // ---------------------------------------------------------------------
 
-// groupId scopes the radio's "name" to this one question, so the
-// browser handles mutual exclusion natively - picking a new correct
-// answer automatically unchecks the old one. Previously these radios
-// had no "name" at all, which meant every radio on the page was its
-// own independent group of one: a stray click could leave two
-// options "correct" with no way to click either back off, since a
-// lone unnamed radio can't be unchecked by clicking it again.
 function qeditOptionRow(text, meaning, isCorrect, groupId) {
   return `
   <div class="qedit-option-row">
@@ -860,10 +865,6 @@ function qeditChunkRow(text) {
   </div>`;
 }
 
-// An alternate accepted word order, edited as one line of chunk text
-// separated by " / " - the teacher rearranges the same words rather
-// than picking from a list, and saveQuestionEdits() below splits on
-// "/" and matches each piece back to the real chunk text on save.
 function qeditAltOrderRow(text) {
   return `
   <div class="qedit-option-row">
@@ -874,8 +875,6 @@ function qeditAltOrderRow(text) {
 
 function qeditCardHtml(q, qi) {
   if (q.type === 'sentence_reorder') {
-    // altOrders is stored server-side as chunk INDEX arrays; turn each
-    // one back into readable chunk text (joined with " / ") for editing.
     const altOrderLines = (q.altOrders || []).map((order) => order.map((idx) => q.chunks[idx]).join(' / '));
     return `
     <div class="card qedit-card" data-question-id="${q.id}" data-question-type="sentence_reorder">
@@ -896,7 +895,7 @@ function qeditCardHtml(q, qi) {
         <button type="button" class="btn btn-ghost btn-sm qedit-add-chunk" style="margin-top:8px;">${icon('plus')} Add chunk</button>
       </div>
       <div class="field" style="margin-bottom:0;">
-        <label>Alternate accepted orders (optional) - only add one if Mandarin genuinely allows these same chunks in a different order (e.g. a time word moved to the front). Separate chunks with " / ", using the exact text from above.</label>
+        <label>Alternate accepted orders (optional) - separate chunks with " / ", using exact text above.</label>
         <div class="qedit-option-list qedit-altorder-list">
           ${altOrderLines.map((line) => qeditAltOrderRow(line)).join('')}
         </div>
@@ -904,10 +903,7 @@ function qeditCardHtml(q, qi) {
       </div>
     </div>`;
   }
-  // Covers both multiple_choice and listening_dictation - they share
-  // the same options/answer editing UI. data-question-type is read
-  // from the actual question type (not hardcoded) so a listening
-  // question stays a listening question after a save.
+
   return `
   <div class="card qedit-card" data-question-id="${q.id}" data-question-type="${q.type}">
     <div class="qedit-head">
@@ -915,7 +911,7 @@ function qeditCardHtml(q, qi) {
       ${q.type === 'listening_dictation' ? '<span class="badge">Listening</span>' : ''}
     </div>
     <div class="field">
-      <label>Question${q.type === 'listening_dictation' ? ' (shown before the audio plays)' : ''}</label>
+      <label>Question${q.type === 'listening_dictation' ? ' (shown before audio plays)' : ''}</label>
       <input class="input qedit-question" value="${escapeHtml(q.question)}" />
     </div>
     <div class="field">
@@ -923,7 +919,7 @@ function qeditCardHtml(q, qi) {
       <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
     </div>
     <div class="field" style="margin-bottom:0;">
-      <label>Options - the selected dot is the correct answer${q.type === 'listening_dictation' ? ', and the text spoken aloud' : ''}</label>
+      <label>Options - the selected dot is the correct answer</label>
       <div class="qedit-option-list">
         ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer, q.id)).join('')}
       </div>
@@ -936,11 +932,6 @@ async function renderTeacherEditQuestions(quizId) {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading questions…</p></div>`;
   const quiz = await Api.getQuiz(quizId);
 
-  // Listeners for add/remove rows are bound to this wrapper element,
-  // which is a fresh DOM node every time this page is opened - not to
-  // #main itself, which stays in the document across every page in
-  // the app and would otherwise pile up one extra duplicate listener
-  // (double, triple-adding rows on click) on every visit.
   const wrapper = document.createElement('div');
   wrapper.innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher/quiz/${quiz.id}')">${icon('arrowLeft')} Back to results</button>
@@ -1157,10 +1148,6 @@ function renderStudentQuiz() {
       ? renderListeningArea(q, hintUsed)
       : renderMultipleChoiceArea(q, hintUsed);
 
-  // Two-step answering: picking an option only highlights it and can
-  // still be changed. The first press of the primary button checks it
-  // (revealing right/wrong) instead of moving on; only once it's been
-  // checked (or was left blank) does the same button advance.
   const currentAnswer = state.studentAnswers[q.id];
   const isChecking = !!(currentAnswer && currentAnswer.checking);
   const hasUncheckedAnswer = !!currentAnswer && !currentAnswer.checked;
@@ -1247,8 +1234,6 @@ function renderMultipleChoiceArea(q, hintUsed) {
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const showOptionMeanings = hintUsed && !!q.optionMeanings;
-  // "locked" only kicks in once the answer has actually been checked -
-  // before that, the student can freely tap a different option.
   const checked = !!(currentAnswer && currentAnswer.checked);
   const checking = !!(currentAnswer && currentAnswer.checking);
 
@@ -1277,7 +1262,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
 
 function bindMultipleChoiceEvents(q) {
   const currentAnswer = state.studentAnswers[q.id];
-  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return;
   mainEl().querySelectorAll('.option').forEach((el) => {
     el.addEventListener('click', () => {
       const opt = q.options[Number(el.dataset.optionIndex)];
@@ -1286,9 +1271,6 @@ function bindMultipleChoiceEvents(q) {
   });
 }
 
-// Picking an option just records it as the pending choice - no server
-// round trip, no lock. The student can tap a different option as many
-// times as they like until they press "Check answer".
 function selectOption(questionId, value) {
   const answeredAtMs = Date.now() - state.studentQuizStartedAt;
   const hintUsed = !!state.studentHintsUsed[questionId];
@@ -1296,11 +1278,6 @@ function selectOption(questionId, value) {
   renderStudentQuiz();
 }
 
-// Listening dictation - a "Play audio" button on top of the ordinary
-// multiple-choice option list. The target text is never shown as
-// text; the student only ever hears it via speechSynthesis and picks
-// the matching option, so this reuses renderMultipleChoiceArea and
-// bindMultipleChoiceEvents underneath rather than duplicating them.
 function renderListeningArea(q, hintUsed) {
   return `
     <div class="listening-audio-row">
@@ -1313,12 +1290,8 @@ function renderListeningArea(q, hintUsed) {
 
 function bindListeningEvents(q) {
   const playBtn = document.getElementById('listen-play-btn');
-  const speak = () => speakMandarin(q.audioText);
+  const speak = () => speakMandarin(q.audioText || q.answer);
   if (playBtn) playBtn.addEventListener('click', speak);
-  // Auto-play once when the question first loads, so the student
-  // doesn't have to tap before hearing anything. Skipped once an
-  // answer already exists, so re-renders (picking an option, showing
-  // the hint) don't replay it on top of itself.
   if (!state.studentAnswers[q.id]) speak();
 }
 
@@ -1360,15 +1333,13 @@ function renderReorderArea(q) {
 function bindReorderEvents(q) {
   const total = q.chunks.length;
   const currentAnswer = state.studentAnswers[q.id];
-  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return;
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
       const placed = [...(state.studentReorderProgress[q.id] || []), id];
       if (placed.length === total) {
-        // Fully assembled - becomes the pending answer, not checked yet.
-        // The student can still hit Clear to rebuild it before checking.
         delete state.studentReorderProgress[q.id];
         const answeredAtMs = Date.now() - state.studentQuizStartedAt;
         const hintUsed = !!state.studentHintsUsed[q.id];
@@ -1383,8 +1354,6 @@ function bindReorderEvents(q) {
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
-      // If this was already the (unchecked) pending answer, tapping a
-      // chip pulls it back out into the pool instead of clearing everything.
       const placed = (currentAnswer && !currentAnswer.checked ? currentAnswer.value : state.studentReorderProgress[q.id]) || [];
       const next = placed.filter((x) => x !== id);
       if (currentAnswer && !currentAnswer.checked) delete state.studentAnswers[q.id];
@@ -1464,16 +1433,11 @@ function sadPopAt(el) {
   setTimeout(() => span.remove(), 850);
 }
 
-// Sends the pending answer to the server and reveals right/wrong on
-// screen. This only fires once the student has committed to an
-// answer by pressing "Check answer" - not the moment they tap an
-// option - so the correct/incorrect icon never appears early.
 async function confirmCurrentAnswer(questionId) {
   const pending = state.studentAnswers[questionId];
   if (!pending || pending.checked || pending.checking) return;
   const { value, usedMeaning, answeredAtMs } = pending;
 
-  // Optimistic "checking" state so the UI can show a pulse while waiting.
   state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct: null, checked: false, checking: true };
   renderStudentQuiz();
 
@@ -1511,9 +1475,6 @@ async function confirmCurrentAnswer(questionId) {
   }
 }
 
-// The single primary button on the quiz screen. First press on a
-// freshly-picked answer checks it; press it again (or press it with
-// nothing picked) and it moves on, submitting on the last question.
 async function studentCheckOrAdvance() {
   const q = state.studentQuiz.questions[state.studentQuestionIndex];
   const current = state.studentAnswers[q.id];
@@ -1583,10 +1544,6 @@ function renderStudentDone() {
   else playCorrectSound();
 }
 
-// A student's own answer review right after finishing - same idea as
-// the teacher's per-attempt review, but built entirely from the
-// `review` array the submit response already included, so it needs
-// no extra request.
 function renderStudentReview() {
   const result = state.studentResult;
   if (!result || !result.review) return go('');
