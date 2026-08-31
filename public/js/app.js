@@ -151,14 +151,30 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech
+// Text-to-speech - used by the "listening dictation" question type.
+// Browser-native, cleans pinyin so only Hanzi is spoken.
 // ---------------------------------------------------------------------
-function speakMandarin(text) {
-  if (!('speechSynthesis' in window) || !text) return;
+function cleanMandarinSpeechText(text) {
+  if (!text) return '';
+  let cleaned = text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '');
+  cleaned = cleaned.replace(/[a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, '');
+  return cleaned.trim();
+}
+
+function speakMandarin(rawText) {
+  if (!('speechSynthesis' in window) || !rawText) return;
+  const textToSpeak = cleanMandarinSpeechText(rawText);
+  if (!textToSpeak) return;
+
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
+  const utter = new SpeechSynthesisUtterance(textToSpeak);
   utter.lang = 'zh-CN';
   utter.rate = 0.85;
+
+  const voices = window.speechSynthesis.getVoices();
+  const zhVoice = voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || v.lang.startsWith('zh'));
+  if (zhVoice) utter.voice = zhVoice;
+
   window.speechSynthesis.speak(utter);
 }
 
