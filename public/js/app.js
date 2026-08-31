@@ -151,40 +151,62 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech
+// Text-to-speech - Fixed Anti-Echo & Natural Mandarin Voice
 // ---------------------------------------------------------------------
 function cleanMandarinSpeechText(text) {
   if (!text) return '';
-  // 1. Hapus pinyin di dalam tanda kurung () atau （）
+  // Hapus semua pinyin dalam kurung () atau （）
   let cleaned = text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '');
-  // 2. Hapus sisa huruf latin / pinyin bernada agar murni Hanzi
-  cleaned = cleaned.replace(/[a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, '');
+  // Hapus huruf latin / angka / simbol aneh agar murni Hanzi
+  cleaned = cleaned.replace(/[a-zA-Z0-9\[\]_#@$%^&*+=\\]/g, '');
+  cleaned = cleaned.replace(/[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, '');
   return cleaned.trim();
 }
 
+function getMandarinVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  return voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || v.lang === 'cmn-Hans-CN' || v.lang === 'zh-Hans-CN')
+      || voices.find((v) => v.lang && v.lang.startsWith('zh'))
+      || null;
+}
+
+// Pre-load voices on startup
+if ('speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    getMandarinVoice();
+  };
+}
+
+let ttsTimeout = null;
 function speakMandarin(rawText) {
   if (!('speechSynthesis' in window) || !rawText) return;
   
   const textToSpeak = cleanMandarinSpeechText(rawText);
   if (!textToSpeak) return;
 
+  // 1. Batalkan semua audio yang sedang / antre berjalan
   window.speechSynthesis.cancel();
-  if (window.speechSynthesis.paused) {
-    window.speechSynthesis.resume();
-  }
+  clearTimeout(ttsTimeout);
 
-  const utter = new SpeechSynthesisUtterance(textToSpeak);
-  utter.lang = 'zh-CN';
-  utter.rate = 0.85;
+  // 2. Jeda buffer 60ms untuk membersihkan antrean audio internal Chrome
+  ttsTimeout = setTimeout(() => {
+    try {
+      const utter = new SpeechSynthesisUtterance(textToSpeak);
+      utter.lang = 'zh-CN';
+      utter.rate = 0.85;
 
-  const voices = window.speechSynthesis.getVoices();
-  const zhVoice = voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || (v.lang && v.lang.startsWith('zh')));
-  if (zhVoice) utter.voice = zhVoice;
+      const zhVoice = getMandarinVoice();
+      if (zhVoice) {
+        utter.voice = zhVoice;
+      }
 
-  window.speechSynthesis.speak(utter);
+      window.speechSynthesis.speak(utter);
+    } catch (_) {}
+  }, 60);
 }
 
-// Helper untuk deteksi apakah soal bertipe listening
+// Helper cerdas pendeteksi soal listening
 function isListeningQuestion(q) {
   if (!q) return false;
   return q.type === 'listening_dictation' ||
@@ -1214,7 +1236,6 @@ function renderStudentQuiz() {
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
   const answered = !!state.studentAnswers[q.id];
 
-  // Gunakan deteksi pintar isListeningQuestion(q)
   const isListen = isListeningQuestion(q);
 
   const answerAreaHtml = q.type === 'sentence_reorder'
@@ -1372,9 +1393,14 @@ function renderListeningArea(q, hintUsed) {
 function bindListeningEvents(q) {
   const playBtn = document.getElementById('listen-play-btn');
   const textToPlay = q.audioText || q.answer || (q.options && q.options[0]) || '';
-  const speak = () => speakMandarin(textToPlay);
-  if (playBtn) playBtn.addEventListener('click', speak);
-  if (!state.studentAnswers[q.id] && textToPlay) speak();
+  
+  if (playBtn) {
+    playBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      speakMandarin(textToPlay);
+    };
+  }
 }
 
 function renderReorderArea(q) {
