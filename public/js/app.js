@@ -151,16 +151,18 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech - Fixed Anti-Echo & Natural Mandarin Voice
+// Text-to-speech - Clean, Single-Playback, Natural Mandarin Voice
 // ---------------------------------------------------------------------
 function cleanMandarinSpeechText(text) {
   if (!text) return '';
-  // Hapus semua pinyin dalam kurung () atau （）
-  let cleaned = text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '');
-  // Hapus huruf latin / angka / simbol aneh agar murni Hanzi
-  cleaned = cleaned.replace(/[a-zA-Z0-9\[\]_#@$%^&*+=\\]/g, '');
-  cleaned = cleaned.replace(/[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, '');
-  return cleaned.trim();
+  // 1. Cek apakah ada karakter Hanzi (Chinese Unicode)
+  const hasHanzi = /[\u4e00-\u9fa5]/.test(text);
+  if (hasHanzi) {
+    // Jika ada Hanzi, buang teks pinyin di dalam kurung () atau （）
+    return text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '').trim();
+  }
+  // 2. Jika soal Pinyin murni (tanpa Hanzi), buang kurung saja agar tetap bisa dibunyikan
+  return text.replace(/[()（）]/g, '').trim();
 }
 
 function getMandarinVoice() {
@@ -171,39 +173,47 @@ function getMandarinVoice() {
       || null;
 }
 
-// Pre-load voices on startup
+// Pre-load daftar suara browser
 if ('speechSynthesis' in window) {
   window.speechSynthesis.onvoiceschanged = () => {
     getMandarinVoice();
   };
 }
 
-let ttsTimeout = null;
+let activeUtterance = null; // Mencegah bug Chrome Garbage Collection
+let speechDebounceTimer = null;
+
 function speakMandarin(rawText) {
   if (!('speechSynthesis' in window) || !rawText) return;
   
   const textToSpeak = cleanMandarinSpeechText(rawText);
   if (!textToSpeak) return;
 
-  // 1. Batalkan semua audio yang sedang / antre berjalan
+  // Hentikan suara yang sedang aktif
   window.speechSynthesis.cancel();
-  clearTimeout(ttsTimeout);
+  clearTimeout(speechDebounceTimer);
 
-  // 2. Jeda buffer 60ms untuk membersihkan antrean audio internal Chrome
-  ttsTimeout = setTimeout(() => {
+  // Buffer 50ms untuk memastikan antrean audio internal browser bersih
+  speechDebounceTimer = setTimeout(() => {
     try {
-      const utter = new SpeechSynthesisUtterance(textToSpeak);
-      utter.lang = 'zh-CN';
-      utter.rate = 0.85;
+      activeUtterance = new SpeechSynthesisUtterance(textToSpeak);
+      activeUtterance.lang = 'zh-CN';
+      activeUtterance.rate = 0.8; // Kecepatan ideal untuk pelafalan nada Mandarin yang jelas
+      activeUtterance.pitch = 1.0;
 
       const zhVoice = getMandarinVoice();
       if (zhVoice) {
-        utter.voice = zhVoice;
+        activeUtterance.voice = zhVoice;
       }
 
-      window.speechSynthesis.speak(utter);
-    } catch (_) {}
-  }, 60);
+      activeUtterance.onend = () => { activeUtterance = null; };
+      activeUtterance.onerror = () => { activeUtterance = null; };
+
+      window.speechSynthesis.speak(activeUtterance);
+    } catch (err) {
+      console.error('TTS Playback Error:', err);
+    }
+  }, 50);
 }
 
 // Helper cerdas pendeteksi soal listening
