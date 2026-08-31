@@ -48,7 +48,7 @@ function cleanAndParseQuizJson(rawInput) {
     }
   } catch (_) {}
 
-  // 2. Intelligent bracket-matching extractor (handles preamble, comments, or multiple blocks)
+  // 2. Intelligent bracket-matching extractor
   const candidates = [];
   let braceDepth = 0;
   let startIndex = -1;
@@ -151,31 +151,45 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech - used by the "listening dictation" question type.
-// Browser-native, cleans pinyin so only Hanzi is spoken.
+// Text-to-speech
 // ---------------------------------------------------------------------
 function cleanMandarinSpeechText(text) {
   if (!text) return '';
+  // 1. Hapus pinyin di dalam tanda kurung () atau （）
   let cleaned = text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '');
+  // 2. Hapus sisa huruf latin / pinyin bernada agar murni Hanzi
   cleaned = cleaned.replace(/[a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, '');
   return cleaned.trim();
 }
 
 function speakMandarin(rawText) {
   if (!('speechSynthesis' in window) || !rawText) return;
+  
   const textToSpeak = cleanMandarinSpeechText(rawText);
   if (!textToSpeak) return;
 
   window.speechSynthesis.cancel();
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
+
   const utter = new SpeechSynthesisUtterance(textToSpeak);
   utter.lang = 'zh-CN';
   utter.rate = 0.85;
 
   const voices = window.speechSynthesis.getVoices();
-  const zhVoice = voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || v.lang.startsWith('zh'));
+  const zhVoice = voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || (v.lang && v.lang.startsWith('zh')));
   if (zhVoice) utter.voice = zhVoice;
 
   window.speechSynthesis.speak(utter);
+}
+
+// Helper untuk deteksi apakah soal bertipe listening
+function isListeningQuestion(q) {
+  if (!q) return false;
+  return q.type === 'listening_dictation' ||
+         q.type === 'listening_tone' ||
+         (typeof q.question === 'string' && q.question.toLowerCase().includes('listen'));
 }
 
 // ---------------------------------------------------------------------
@@ -962,14 +976,15 @@ function qeditCardHtml(q, qi) {
     </div>`;
   }
 
+  const isListen = isListeningQuestion(q);
   return `
   <div class="card qedit-card" data-question-id="${q.id}" data-question-type="${q.type}">
     <div class="qedit-head">
       <span class="qedit-number">Q${qi + 1}</span>
-      ${q.type === 'listening_dictation' ? '<span class="badge">Listening</span>' : ''}
+      ${isListen ? '<span class="badge">Listening</span>' : ''}
     </div>
     <div class="field">
-      <label>Question${q.type === 'listening_dictation' ? ' (shown before audio plays)' : ''}</label>
+      <label>Question${isListen ? ' (shown before audio plays)' : ''}</label>
       <input class="input qedit-question" value="${escapeHtml(q.question)}" />
     </div>
     <div class="field">
@@ -977,7 +992,7 @@ function qeditCardHtml(q, qi) {
       <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
     </div>
     <div class="field" style="margin-bottom:0;">
-      <label>Options - the selected dot is the correct answer</label>
+      <label>Options - the selected dot is the correct answer${isListen ? ', and the audio text spoken' : ''}</label>
       <div class="qedit-option-list">
         ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer, q.id)).join('')}
       </div>
@@ -1199,9 +1214,12 @@ function renderStudentQuiz() {
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
   const answered = !!state.studentAnswers[q.id];
 
+  // Gunakan deteksi pintar isListeningQuestion(q)
+  const isListen = isListeningQuestion(q);
+
   const answerAreaHtml = q.type === 'sentence_reorder'
     ? renderReorderArea(q)
-    : q.type === 'listening_dictation'
+    : isListen
       ? renderListeningArea(q, hintUsed)
       : renderMultipleChoiceArea(q, hintUsed);
 
@@ -1270,9 +1288,15 @@ function renderStudentQuiz() {
     });
   });
 
-  if (q.type === 'sentence_reorder') bindReorderEvents(q);
-  else bindMultipleChoiceEvents(q);
-  if (q.type === 'listening_dictation') bindListeningEvents(q);
+  if (q.type === 'sentence_reorder') {
+    bindReorderEvents(q);
+  } else {
+    bindMultipleChoiceEvents(q);
+  }
+  
+  if (isListen) {
+    bindListeningEvents(q);
+  }
 
   const hintBtn = document.getElementById('hint-lamp-btn');
   if (!answered) {
@@ -1347,9 +1371,10 @@ function renderListeningArea(q, hintUsed) {
 
 function bindListeningEvents(q) {
   const playBtn = document.getElementById('listen-play-btn');
-  const speak = () => speakMandarin(q.audioText || q.answer);
+  const textToPlay = q.audioText || q.answer || (q.options && q.options[0]) || '';
+  const speak = () => speakMandarin(textToPlay);
   if (playBtn) playBtn.addEventListener('click', speak);
-  if (!state.studentAnswers[q.id]) speak();
+  if (!state.studentAnswers[q.id] && textToPlay) speak();
 }
 
 function renderReorderArea(q) {
