@@ -65,7 +65,8 @@ Example: question "A：你想喝什么？(nǐ xiǎng hē shénme?)", options inc
     hint: 'Student drags shuffled word chunks into the correct order.',
     defaultOn: true,
     instructions: `REORDER THE SENTENCE ("type": "sentence_reorder", NOT "multiple_choice" - this kind has its own JSON shape, shown separately below) - give a correct Hanzi sentence broken into 4-7 word/phrase chunks, listed in their CORRECT reading order (the app shuffles them for the student - never shuffle them yourself). Each chunk is one word or short phrase with its pinyin, formatted exactly like an option elsewhere: "chunk (pīnyīn)". Write a NEW sentence, not one copied verbatim from the material, that uses a grammar point or vocabulary word the material taught.
-Example: for the sentence 我明天要去学校 (I have to go to school tomorrow), chunks (in correct order) would be: ["我 (wǒ)", "明天 (míngtiān)", "要 (yào)", "去 (qù)", "学校 (xuéxiào)"].`,
+Example: for the sentence 我明天要去学校 (I have to go to school tomorrow), chunks (in correct order) would be: ["我 (wǒ)", "明天 (míngtiān)", "要 (yào)", "去 (qù)", "学校 (xuéxiào)"].
+MOST sentences only have ONE natural word order - for those, omit "altOrders" entirely. Only include "altOrders" when Mandarin genuinely allows a second, equally correct ordering of the SAME chunks - most commonly a time word that can also front the sentence (明天我要去学校 vs 我明天要去学校 are both correct). Each entry in "altOrders" must reuse the exact same chunk strings from "chunks", character-for-character, just in a different sequence - never invent a new chunk, drop one, or reword one. When in doubt, leave "altOrders" out entirely - a wrong order marked as accepted is worse than not offering a second one.`,
   },
   {
     id: 'listening_dictation',
@@ -75,6 +76,15 @@ Example: for the sentence 我明天要去学校 (I have to go to school tomorrow
     instructions: `LISTENING DICTATION ("type": "listening_dictation", uses the SAME JSON shape as multiple_choice above) - the student never sees the Hanzi text up front; the app speaks it aloud instead, and the student picks which option matches what they heard. Set "question" to a short fixed English instruction, always exactly "Listen and select what you hear." - do not put the Hanzi sentence in "question", it would give the answer away before the audio plays. "options" are candidate Hanzi + pinyin sentences (keep each option short - one clause or a single sentence, not a paragraph), one of which - copied exactly into "answer" - is what actually gets spoken to the student. Distractors should sound plausibly similar when spoken (a similar sentence pattern, an easily mixed-up word, a tone pair a beginner might mishear), not wildly different sentences.
 Example: options include "我 (wǒ) 想 (xiǎng) 喝 (hē) 水 (shuǐ)。" as the answer plus distractors like "我 (wǒ) 想 (xiǎng) 喝 (hē) 茶 (chá)。" (a plausible mishearing) and "我们 (wǒmen) 想 (xiǎng) 喝 (hē) 水 (shuǐ)。" (singular/plural mix-up).`,
   },
+  {
+    id: 'listening_tone',
+    label: 'Listening: tone check',
+    hint: 'Same syllable, different tones - tests tone recognition by ear, not reading.',
+    defaultOn: false,
+    instructions: `LISTENING: TONE CHECK ("type": "listening_dictation", uses the SAME JSON shape as multiple_choice above, exactly like Listening dictation) - every option shares the SAME base syllable(s) (identical pinyin letters, ignoring tone marks) but with DIFFERENT tones, so the only way to tell them apart is by ear, not by reading the Hanzi. "question" is always exactly "Listen and select what you hear.". "options" are single words or very short phrases in Hanzi + pinyin, all sharing the same untoned pinyin spelling as the one copied into "answer" - only the tone marks (and therefore the Hanzi character itself) differ between options.
+Example: options "妈 (mā)" as the answer plus distractors "麻 (má)", "马 (mǎ)", "骂 (mà)" - all read "ma", each a different tone.
+If the teaching material doesn't contain enough same-syllable, different-tone pairs to build this kind from, use common HSK-appropriate tone-pair words instead (mā/má/mǎ/mà, mǎi/mài, etc.) rather than skipping the kind - this tests tone perception generally, not material-specific vocabulary.`,
+  },
 ];
 
 const DEFAULT_KIND_IDS = QUESTION_KINDS.filter((k) => k.defaultOn).map((k) => k.id);
@@ -82,7 +92,7 @@ const DEFAULT_KIND_IDS = QUESTION_KINDS.filter((k) => k.defaultOn).map((k) => k.
 function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
   const kinds = QUESTION_KINDS.filter((k) => kindIds.includes(k.id));
   const hasReorder = kinds.some((k) => k.id === 'sentence_reorder');
-  const hasListening = kinds.some((k) => k.id === 'listening_dictation');
+  const hasListening = kinds.some((k) => k.id === 'listening_dictation' || k.id === 'listening_tone');
   const otherKinds = kinds.filter((k) => k.id !== 'sentence_reorder');
 
   const kindsList = kinds.map((k) => k.label).join(', ') || 'a mix of question styles';
@@ -102,6 +112,7 @@ function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
       "question": "Short English instruction or context for what sentence to build",
       "questionMeaning": "English meaning of the finished sentence (used as an optional hint)",
       "chunks": ["chunk one (pinyin)", "chunk two (pinyin)", "chunk three (pinyin)", "chunk four (pinyin)"],
+      "altOrders": [["chunk two (pinyin)", "chunk one (pinyin)", "chunk three (pinyin)", "chunk four (pinyin)"]],
       "explanation": "One short sentence on why this order is correct"
     }`;
 
