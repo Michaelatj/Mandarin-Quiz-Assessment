@@ -26,7 +26,7 @@ function clearQuizTimer() {
 }
 
 // ---------------------------------------------------------------------
-// JSON sanitization helper
+// Smart JSON sanitization & extraction helper
 // ---------------------------------------------------------------------
 function cleanAndParseQuizJson(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') {
@@ -35,26 +35,76 @@ function cleanAndParseQuizJson(rawInput) {
 
   let cleaned = rawInput.trim();
 
-  // Strip markdown code fences if provided by LLM (```json ... ``` or ``` ... ```)
+  // Strip markdown code blocks (```json ... ```)
   if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   }
 
-  // Find outermost curly braces to ignore any accidental text before/after JSON
+  // 1. Direct parse attempt
+  try {
+    const directParsed = JSON.parse(cleaned);
+    if (directParsed && Array.isArray(directParsed.questions)) {
+      return directParsed;
+    }
+  } catch (_) {}
+
+  // 2. Intelligent bracket-matching extractor (handles preamble, comments, or multiple blocks)
+  const candidates = [];
+  let braceDepth = 0;
+  let startIndex = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === '\\') {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (char === '{') {
+        if (braceDepth === 0) startIndex = i;
+        braceDepth++;
+      } else if (char === '}') {
+        braceDepth--;
+        if (braceDepth === 0 && startIndex !== -1) {
+          candidates.push(cleaned.slice(startIndex, i + 1));
+          startIndex = -1;
+        }
+      }
+    }
+  }
+
+  // Find candidate that contains valid quiz questions
+  for (const candidate of candidates.reverse()) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return parsed;
+      }
+    } catch (_) {}
+  }
+
+  // 3. Fallback to outer braces match
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
-
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error('Could not find a valid JSON object structure { ... } in the pasted text.');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    } catch (err) {
+      throw new Error(`JSON Syntax Error: ${err.message}. Pastikan output AI tidak terpotong.`);
+    }
   }
 
-  cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-
-  try {
-    return JSON.parse(cleaned);
-  } catch (err) {
-    throw new Error(`JSON syntax error: ${err.message}. Ensure double quotes inside values are properly escaped or replaced with single quotes.`);
-  }
+  throw new Error('Tidak dapat menemukan format JSON quiz yang valid. Coba generate ulang quiz.');
 }
 
 // ---------------------------------------------------------------------
@@ -101,8 +151,7 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech - used by the "listening dictation" question type.
-// Browser-native, no audio files and no server round trip.
+// Text-to-speech
 // ---------------------------------------------------------------------
 function speakMandarin(text) {
   if (!('speechSynthesis' in window) || !text) return;
@@ -155,7 +204,6 @@ function go(hash) {
 // ---------------------------------------------------------------------
 // Theme switcher
 // ---------------------------------------------------------------------
-
 const THEMES = [
   { id: 'ricepaper', name: 'Rice Paper', swatch: '#8a5a35' },
   { id: 'ink-seal', name: 'Ink & Seal', swatch: '#c1442d' },
@@ -217,7 +265,6 @@ function renderThemeSwitcher_replace(oldWrap) {
 // ---------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------
-
 async function render() {
   const hash = window.location.hash.replace(/^#\/?/, '');
   const [rootSeg, ...rest] = hash.split('/').filter(Boolean);
@@ -247,7 +294,6 @@ window.addEventListener('DOMContentLoaded', render);
 // ---------------------------------------------------------------------
 // Landing
 // ---------------------------------------------------------------------
-
 function renderLanding() {
   mainEl().innerHTML = `
     <nav class="nav-menu">
@@ -349,7 +395,6 @@ function initScrollReveal() {
 // ---------------------------------------------------------------------
 // Teacher: Auth & Dashboard
 // ---------------------------------------------------------------------
-
 function isTeacherLoggedIn() {
   return !!localStorage.getItem('teacherKey');
 }
@@ -590,7 +635,6 @@ function editQuizTitle(btn) {
 // ---------------------------------------------------------------------
 // Teacher: new quiz
 // ---------------------------------------------------------------------
-
 function renderTeacherNewQuiz() {
   mainEl().innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher')">${icon('arrowLeft')} Back to quizzes</button>
@@ -703,7 +747,6 @@ function copyPrompt() {
 // ---------------------------------------------------------------------
 // Teacher: results
 // ---------------------------------------------------------------------
-
 async function renderTeacherResults(quizId) {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading results…</p></div>`;
   const { quiz, attempts } = await Api.getResults(quizId);
@@ -846,7 +889,6 @@ function toggleReview(id) {
 // ---------------------------------------------------------------------
 // Teacher: edit questions & answers
 // ---------------------------------------------------------------------
-
 function qeditOptionRow(text, meaning, isCorrect, groupId) {
   return `
   <div class="qedit-option-row">
@@ -1047,7 +1089,6 @@ function copyText(text, btn) {
 // ---------------------------------------------------------------------
 // Student: join & quiz
 // ---------------------------------------------------------------------
-
 function getQueryParam(name) {
   const match = window.location.hash.match(new RegExp(`[?&]${name}=([^&]+)`));
   return match ? decodeURIComponent(match[1]) : '';
