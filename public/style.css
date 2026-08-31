@@ -407,7 +407,21 @@ footer.hint {
   cursor: pointer;
   font-weight: 600;
   font-size: 14px;
+  white-space: nowrap;
   transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, border-radius 0.2s ease;
+}
+
+/* Icon-only button - a clean fixed-size square/circle instead of the
+   asymmetric horizontal padding a text button gets when its label is
+   removed. Used for delete actions once they're reduced to just the
+   trash icon, on both the dashboard list and a quiz's results page. */
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .btn:hover { background: var(--surface-hover); }
 .btn:active { transform: scale(0.98); }
@@ -503,6 +517,25 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 
 .list-card-title { font-family: var(--font-display); font-size: 16px; margin-bottom: 4px; }
 .list-card-meta { font-size: 12.5px; color: var(--text-faint); display: flex; gap: 14px; }
+.list-card-body { flex: 1; min-width: 0; }
+
+/* Bulk-select mode on the teacher dashboard - a purely visual check
+   square (not a real <input>, to avoid the click bubbling to the
+   card's own click handler and double-toggling), toggled entirely
+   through the list-card's click handler in app.js. */
+.dash-checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dash-checkbox.checked { border-color: var(--accent); background: var(--accent-soft); }
 
 /* ===========================================================
    Choice landing (Teacher / Student)
@@ -1102,6 +1135,7 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 }
 .qedit-remove-row:hover { background: var(--accent-soft); color: var(--accent); }
 .qedit-chunk-list .qedit-option-row .qedit-option-text { flex: 1; }
+.qedit-altorder-list .qedit-option-row .qedit-option-text { flex: 1; }
 
 /* ===========================================================
    Theme switcher
