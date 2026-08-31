@@ -68,8 +68,10 @@ function questionFromRow(row) {
   if (base.type === 'sentence_reorder') {
     // `options` holds the chunks in their CORRECT order for this
     // type - see supabase/schema.sql. Shuffling for display happens
-    // only in toStudentView() in server.js, never here.
-    return { ...base, chunks: row.options };
+    // only in toStudentView() in server.js, never here. `alt_orders`
+    // (if any) holds additional accepted chunk-index orderings - see
+    // validateAltOrders() in server.js for how those are built.
+    return { ...base, chunks: row.options, altOrders: row.alt_orders || undefined };
   }
   return {
     ...base,
@@ -121,6 +123,7 @@ async function createQuiz(quiz) {
     options: q.type === 'sentence_reorder' ? q.chunks : q.options,
     option_meanings: q.optionMeanings || null,
     answer: q.type === 'sentence_reorder' ? null : q.answer,
+    alt_orders: q.type === 'sentence_reorder' ? (q.altOrders || null) : null,
     points: q.points,
   }));
 
@@ -139,27 +142,43 @@ async function createQuiz(quiz) {
   return getQuizById(quiz.id);
 }
 
+// Was previously an N+1 query pattern - a `for` loop over every quiz
+// row, each iteration separately COUNT-ing that one quiz's questions
+// and attempts (2 round trips per quiz, one quiz at a time, so 10
+// quizzes meant sitting through roughly 20 sequential round trips
+// before the dashboard could render). This is what made "Your
+// quizzes" feel slow to load - not Supabase itself being slow, just
+// far too many small back-and-forth requests to it.
+//
+// Fixed by fetching every question's and every attempt's quiz_id in
+// ONE query each (both in parallel with the quiz list itself, so 3
+// requests total no matter how many quizzes exist) and counting them
+// in memory. Scales fine for a classroom tool's data volumes; if this
+// project ever has thousands of questions/attempts, a database-side
+// count(*) ... group by quiz_id query would be the next step, but
+// that needs a Postgres view or RPC function since plain PostgREST
+// `select` can't group-and-count on its own.
 async function listQuizzes() {
-  const quizzes = unwrap(
-    await supabase.from('quizzes').select('*').order('created_at', { ascending: false })
-  );
-  const results = [];
-  for (const row of quizzes) {
-    const [{ count: questionCount }, { count: attemptCount }] = await Promise.all([
-      supabase.from('questions').select('*', { count: 'exact', head: true }).eq('quiz_id', row.id),
-      supabase.from('attempts').select('*', { count: 'exact', head: true }).eq('quiz_id', row.id),
-    ]);
-    results.push({
-      id: row.id,
-      code: row.code,
-      title: row.title,
-      description: row.description,
-      createdAt: row.created_at,
-      questionCount: questionCount || 0,
-      attemptCount: attemptCount || 0,
-    });
-  }
-  return results;
+  const [quizzes, questionRows, attemptRows] = await Promise.all([
+    supabase.from('quizzes').select('*').order('created_at', { ascending: false }).then(unwrap),
+    supabase.from('questions').select('quiz_id').then(unwrap),
+    supabase.from('attempts').select('quiz_id').then(unwrap),
+  ]);
+
+  const questionCounts = {};
+  questionRows.forEach((r) => { questionCounts[r.quiz_id] = (questionCounts[r.quiz_id] || 0) + 1; });
+  const attemptCounts = {};
+  attemptRows.forEach((r) => { attemptCounts[r.quiz_id] = (attemptCounts[r.quiz_id] || 0) + 1; });
+
+  return quizzes.map((row) => ({
+    id: row.id,
+    code: row.code,
+    title: row.title,
+    description: row.description,
+    createdAt: row.created_at,
+    questionCount: questionCounts[row.id] || 0,
+    attemptCount: attemptCounts[row.id] || 0,
+  }));
 }
 
 async function getQuizById(id) {
@@ -193,6 +212,7 @@ async function updateQuestions(quizId, questions) {
       options: q.type === 'sentence_reorder' ? q.chunks : q.options,
       option_meanings: q.optionMeanings || null,
       answer: q.type === 'sentence_reorder' ? null : q.answer,
+      alt_orders: q.type === 'sentence_reorder' ? (q.altOrders || null) : null,
     };
     return supabase.from('questions').update(patch).eq('id', q.id).eq('quiz_id', quizId).then(unwrap);
   }));
