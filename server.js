@@ -61,6 +61,48 @@ function validateQuiz(payload) {
   return errors;
 }
 
+// A sentence can genuinely have more than one correct word order (a
+// time word that can front or stay put, etc). "chunks" always stores
+// ONE correct order (as before - that's still what the student sees
+// shuffled), and altOrders holds any additional accepted orderings,
+// each as chunk INDEX arrays into that same "chunks" list, so
+// grading never has to compare text - just index sequences.
+//
+// Both the "New quiz" JSON paste and the teacher's manual question
+// editor supply altOrders as arrays of the actual chunk TEXT in the
+// alternate order (easier for both an AI and a human to write than
+// abstract indices) - this turns that into index arrays and drops
+// anything that isn't an exact reordering of the same chunk set.
+// errors is only populated for entries that don't validate, so the
+// manual editor can surface a specific message; normalizeQuiz (for
+// AI-generated quizzes) ignores errors and just keeps what's valid.
+function validateAltOrders(chunks, rawAltOrders) {
+  const errors = [];
+  if (!Array.isArray(rawAltOrders) || rawAltOrders.length === 0) return { altOrders: undefined, errors };
+  const altOrders = [];
+  rawAltOrders.forEach((order, i) => {
+    if (!Array.isArray(order) || order.length !== chunks.length) {
+      errors.push(`alternate order ${i + 1} doesn't use the same number of chunks as above.`);
+      return;
+    }
+    const remaining = chunks.map((text, idx) => ({ text, idx }));
+    const indices = [];
+    for (const rawText of order) {
+      const text = String(rawText).trim();
+      const pos = remaining.findIndex((r) => r.text === text);
+      if (pos === -1) { indices.length = -1; break; }
+      indices.push(remaining[pos].idx);
+      remaining.splice(pos, 1);
+    }
+    if (indices.length !== chunks.length) {
+      errors.push(`alternate order ${i + 1} doesn't use the exact same chunks as above, reordered.`);
+      return;
+    }
+    altOrders.push(indices);
+  });
+  return { altOrders: altOrders.length ? altOrders : undefined, errors };
+}
+
 function normalizeQuiz(payload) {
   return {
     id: nanoid(10),
@@ -84,7 +126,9 @@ function normalizeQuiz(payload) {
         points: typeof q.points === 'number' ? q.points : 1,
       };
       if (type === 'sentence_reorder') {
-        return { ...base, chunks: q.chunks.map((c) => String(c).trim()) };
+        const chunks = q.chunks.map((c) => String(c).trim());
+        const { altOrders } = validateAltOrders(chunks, q.altOrders);
+        return { ...base, chunks, altOrders };
       }
       return {
         ...base,
@@ -244,7 +288,10 @@ app.patch('/api/quizzes/:id/questions', requireTeacher, async (req, res) => {
         errors.push(`Question ${i + 1}: needs at least 2 chunks.`);
         return null;
       }
-      return { id: existing.id, type: existing.type, question: String(q.question || '').trim(), questionMeaning: q.questionMeaning ? String(q.questionMeaning).trim() : undefined, chunks: q.chunks.map((c) => String(c).trim()) };
+      const chunks = q.chunks.map((c) => String(c).trim());
+      const { altOrders, errors: altErrors } = validateAltOrders(chunks, q.altOrders);
+      altErrors.forEach((msg) => errors.push(`Question ${i + 1}: ${msg}`));
+      return { id: existing.id, type: existing.type, question: String(q.question || '').trim(), questionMeaning: q.questionMeaning ? String(q.questionMeaning).trim() : undefined, chunks, altOrders };
     }
     if (!Array.isArray(q.options) || q.options.length < 2) {
       errors.push(`Question ${i + 1}: needs at least 2 options.`);
@@ -300,10 +347,19 @@ app.post('/api/join/:code', async (req, res) => {
   res.status(201).json({ attemptId: attempt.id, quiz: toStudentView(quiz) });
 });
 
+function chunkOrderMatches(value, order) {
+  return Array.isArray(order) && order.length === value.length && value.every((id, idx) => id === order[idx]);
+}
+
 function isAnswerCorrect(q, value) {
   if (q.type === 'sentence_reorder') {
     const total = q.chunks.length;
-    return Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+    if (!Array.isArray(value) || value.length !== total) return false;
+    // "chunks" is itself stored in its own correct order, so the
+    // "primary" accepted order is always [0, 1, 2, ...]; altOrders
+    // (if any) are additional accepted permutations of the same set.
+    if (value.every((id, idx) => id === idx)) return true;
+    return Array.isArray(q.altOrders) && q.altOrders.some((order) => chunkOrderMatches(value, order));
   }
   return value === q.answer;
 }
