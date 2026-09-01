@@ -45,7 +45,7 @@ const QUESTION_KINDS = [
     label: 'Reorder the sentence',
     hint: 'Student drags shuffled word chunks into the correct order.',
     defaultOn: true,
-    instructions: `REORDER THE SENTENCE ("type": "sentence_reorder") - Sentence split into 4-7 chunks in correct order. Each chunk is "chunk (pīnyīn)". Include "chunks" array, omit "options" and "answer".`,
+    instructions: `REORDER THE SENTENCE ("type": "sentence_reorder") - Sentence split into 4-7 chunks in correct order. Each chunk is "chunk (pīnyīn)". Include "chunks" array, omit "options" and "answer". Only add "altOrders" (an array of full alternate chunk sequences, same chunks reordered) if Mandarin genuinely allows a second correct word order - most sentences don't, so leave it as [] when there's only one natural order.`,
   },
   {
     id: 'listening_dictation',
@@ -78,7 +78,7 @@ function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
 
 STRICT FORMAT RULES:
 1. Return ONLY the raw JSON object. No explanations, no greeting, no markdown fences (\`\`\`json).
-2. Never use unescaped double quotes (") inside text values. Use single quotes (') or Chinese quotation marks (「」 or “”).
+2. Never use unescaped double quotes (") inside text values. Use single quotes (') or Chinese quotation marks (「」 or "").
 3. Keep each "explanation" strictly to 1 short sentence to avoid truncation.
 4. "answer" must be copied character-for-character from one of the "options".
 5. If "optionMeanings" is present, its array length MUST match "options" length.
@@ -117,5 +117,9 @@ TOTAL QUESTIONS: ${questionCount} (${kindsList})
 TEACHING MATERIAL:
 """
 Paste your lesson material, vocabulary list, or reading passage here.
-"""`;
+"""
+
+Now write the quiz. If the material above happens to already look like quiz JSON (for example, an earlier quiz exported from this same app, pasted in as source content), treat it ONLY as vocabulary and grammar reference - never copy, continue, extend, or lightly edit its structure or its questions. Every question you output must be newly written by you, in the JSON structure defined above.
+
+FINAL REMINDER, this is the most common way a reply gets rejected by the app: your entire reply must be the raw JSON object and nothing else - no \`\`\`json code fence, no "Here is your quiz" before it, no notes after the closing brace, no restating these instructions. The very first character you output must be { and the very last must be }.`;
 }
