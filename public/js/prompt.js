@@ -6,12 +6,17 @@
 
 const QUESTION_KINDS = [
   {
-    id: 'fill_blank',
-    label: 'Fill in the blank',
-    hint: 'A Hanzi sentence with a word blanked out.',
-    defaultOn: true,
-    instructions: `FILL IN THE BLANK ("type": "multiple_choice") - Hanzi sentence with one word blanked out as ___. Annotate EVERY word with pinyin in parentheses: 他 (tā) 晚上 (wǎnshang) 先 (xiān) 吃饭 (chīfàn)，然后 (ránhòu) ___。 Options are candidate Hanzi + pinyin only.`,
-  },
+  id: 'fill_blank',
+  label: 'Fill in the blank',
+  hint: 'A Hanzi sentence with a word blanked out.',
+  defaultOn: true,
+  instructions: `FILL IN THE BLANK ("type": "multiple_choice") - a Hanzi sentence with exactly one word or phrase replaced by the blank marker "___". The blank must contain ONLY "___" and NOTHING ELSE. NEVER put the correct answer, pinyin, or any other text inside or immediately after the blank. For example, "我 (wǒ) ___ 数学 (shùxué) 作业 (zuòyè)。" is correct; "我 (wǒ) ___ (méi zuò wán) 数学 (shùxué) 作业 (zuòyè)。" is WRONG because the answer is revealed in the question.
+All options are candidate Hanzi + pinyin to fill the blank. Options use Hanzi + pinyin only. The question itself uses Hanzi + pinyin for every visible word or short phrase EXCEPT the blank marker "___", which must never have pinyin or an answer attached to it.
+PINYIN IS REQUIRED FOR EVERY VISIBLE HANZI WORD OR SHORT PHRASE IN THE SENTENCE, but NEVER for "___". Annotate the sentence word by word, leaving the blank completely empty.
+IMPORTANT: the correct answer must appear ONLY in the "options" and "answer" fields, never in the "question" field. The question must give the student no visual clue that reveals which option is correct.
+IMPORTANT: do not copy a sentence straight out of the material. Write a NEW sentence of your own, in a different context, that uses the same word or grammar point the material taught.
+Example: if the material taught 做功课 (zuò gōngkè) in the sentence "我每天做功课 (wǒ měitiān zuò gōngkè)", don't reuse that sentence - write something like "他 (tā) 晚上 (wǎnshang) 一般 (yìbān) 先 (xiān) 吃饭 (chīfàn)，然后 (ránhòu) ___。" instead, with every visible word pinyin-annotated and the blank left completely empty.`,
+},
   {
     id: 'guess_hanzi',
     label: 'English -> Mandarin',
@@ -111,8 +116,46 @@ JSON OUTPUT STRUCTURE:
   ]
 }
 
-TARGET LEVEL: HSK ${hskLevel}
-TOTAL QUESTIONS: ${questionCount} (${kindsList})
+${shapeExplainer}
+
+Write every question as one of these kinds, mixed across the quiz (roughly evenly across whichever kinds are listed, more of whichever best fits the material):
+
+${kindInstructions}
+
+Other language rules - read carefully:
+- For Fill in the blank questions, "___" is a protected blank marker: NEVER append pinyin, Hanzi, the correct answer, parentheses, or any other text to it. The blank must remain exactly "___" in the question. The missing word or phrase may appear only in "options" and "answer".
+- Outside of English -> Mandarin (question in English) and What does it mean (options in English), never put English inside "question" or "options" - Hanzi with pinyin only, like 汉字 (hànzì).
+- Include "questionMeaning" as an English translation wherever the question itself is in Hanzi - the app hides this behind a hint button the student can choose to tap. Omit "questionMeaning" only when the question is already in plain English.
+- "optionMeanings" only applies to multiple_choice kinds whose options are Hanzi (Fill in the blank, English -> Mandarin, Conversation reply, Reorder does not use it at all). Omit it for kinds where the options are already English or Indonesian.
+- For multiple_choice questions, "answer" must be copied exactly, character-for-character, from one of the "options".
+- Stay within the vocabulary and grammar of the stated HSK level (or slightly below it) for everything except the one concept the material is actually teaching. Do not casually introduce harder words in the distractor options or wrong chunks.
+
+Options and chunks - give more than the app shows at once:
+- For multiple_choice kinds, give 5 or 6 options: one correct answer plus 4 or 5 distractors, all plausible, all at the stated HSK level. The app randomly shows the student only 4 of these each time, so different attempts see different wrong answers.
+- Every distractor needs a real reason a student might pick it (a near-meaning word, a similar-sounding word, a common mix-up, or - for Conversation reply - a reply to a different question) - not random unrelated content.
+- For Reorder the sentence, give the chunks in their correct order - the app shuffles them itself before showing the student.
+- If "optionMeanings" is included, it must be the same length as "options", same order.
+
+Valid JSON rules - read carefully, this matters:
+- Never use a straight double quote character (") anywhere inside a text value, including inside the pinyin parentheses or an English aside. A stray " inside a string breaks the JSON and the whole quiz gets rejected.
+- If you need to show quoted speech inside a question, option, or meaning, use the Chinese quotation marks "..." or 「...」 instead of "...". Better yet, just rephrase without quoting anything.
+- Do not use backslashes in any text value.
+- Before answering, mentally check that every value is a normal quoted string with no stray " or \\ characters inside it.
+
+Other rules:
+- Write exactly ${questionCount} questions, ordered from easier to harder, using only these kinds: ${kindsList}.
+- Base every question only on the vocabulary, grammar, and facts in the material below - don't invent anything that wasn't in it, but do write original example sentences rather than reusing the material's own sentences verbatim.
+- Keep each question focused on one idea, and give it enough surrounding context (a full sentence or a short exchange, not an isolated word) that only one reading of it makes sense - a question a student could answer correctly by luck, without knowing the material, needs more context.
+- Don't repeat the same word, phrase, or grammar point as the main point of more than one question. If you're tempted to write two questions that would test the same thing, cover a second vocabulary word or pattern from the material instead, or drop one and write a harder one on something not yet covered. A student re-answering the "same" question twice with different wording is not variety.
+
+Before you output anything, silently re-read your own draft question by question and check each one against this list, fixing anything that fails before writing the final answer:
+- Exactly one option (or exactly one chunk order) is correct - could a fair-minded native speaker argue for a second option as also correct, given the question's context? If so, either add context that rules it out or rewrite the distractor so it's clearly wrong.
+- No two questions in the set test the same word or point in different clothing.
+- Every distractor is wrong for a specific, checkable reason, not just "different."
+- The "answer" string is copied character-for-character from "options" (for multiple_choice), and pinyin annotation is present everywhere this kind requires it.
+Do this check silently - do not show your work, do not explain your reasoning, and do not mention that you double-checked. Output only the final corrected JSON object as instructed above.
+
+STUDENT HSK LEVEL: HSK ${hskLevel}
 
 TEACHING MATERIAL:
 """

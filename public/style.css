@@ -1006,6 +1006,26 @@ textarea.input { resize: vertical; min-height: 220px; font-family: var(--font-mo
 .mark.correct { color: var(--jade); }
 .mark.incorrect { color: var(--accent); }
 
+.answer-num { color: var(--text-faint); font-weight: 600; margin-right: 2px; }
+.answer-detail { color: var(--text-faint); font-size: 12.5px; margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+
+.btn-review {
+  border-radius: 10px;
+  padding: 7px 12px 7px 14px;
+  gap: 6px;
+  font-size: 13px;
+}
+.btn-review-chevron {
+  display: inline-flex;
+  align-items: center;
+  transform: rotate(90deg);
+  transition: transform 0.18s ease;
+}
+.btn-review.is-open {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.btn-review.is-open .btn-review-chevron { transform: rotate(-90deg); }
 /* ===========================================================
    Misc
 =========================================================== */
