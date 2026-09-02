@@ -69,6 +69,21 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
+// Text-to-speech - used by the "listening dictation" question type.
+// Browser-native, no audio files and no server round trip.
+// ---------------------------------------------------------------------
+function speakMandarin(text) {
+  if (!('speechSynthesis' in window) || !text) return;
+  window.speechSynthesis.cancel(); // stop any utterance already in flight
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'zh-CN';
+  // Slightly below natural speed - this is for a learner catching
+  // individual syllables, not native-speed listening practice.
+  utter.rate = 0.85;
+  window.speechSynthesis.speak(utter);
+}
+
+// ---------------------------------------------------------------------
 // Toasts
 // ---------------------------------------------------------------------
 let toastTimeout = null;
@@ -364,16 +379,70 @@ async function renderTeacher(rest) {
   return renderTeacherDashboard();
 }
 
+// Module-level so a checkbox toggle or the select-mode toggle itself
+// can re-render just the list locally (renderDashboardList) without
+// refetching from the API - only a fresh page load (renderTeacherDashboard)
+// resets these back to "off".
+let quizSelectMode = false;
+let selectedQuizIds = new Set();
+let dashboardQuizzesCache = [];
+
 async function renderTeacherDashboard() {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading your quizzes…</p></div>`;
-  const quizzes = await Api.listQuizzes();
+  dashboardQuizzesCache = await Api.listQuizzes();
+  quizSelectMode = false;
+  selectedQuizIds = new Set();
 
-  const listHtml = quizzes.length ? quizzes.map((q) => `
-    <div class="list-card" onclick="go('teacher/quiz/${q.id}')">
-      <div>
+  mainEl().innerHTML = `
+    <div class="row-between" style="margin-bottom: 20px; flex-wrap:wrap; gap:10px;">
+      <h1 style="margin:0;">Your quizzes</h1>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-ghost btn-sm" id="dash-select-toggle">${icon('check', 14)} Select</button>
+        <button class="btn btn-primary" onclick="go('teacher/new')">${icon('plus')} New quiz</button>
+      </div>
+    </div>
+    <div id="dash-bulk-bar"></div>
+    <div id="quiz-list-container"></div>
+  `;
+
+  document.getElementById('dash-select-toggle').addEventListener('click', () => {
+    quizSelectMode = !quizSelectMode;
+    selectedQuizIds = new Set();
+    renderDashboardList();
+  });
+
+  renderDashboardList();
+}
+
+// Rebuilds just the list + bulk-action bar from dashboardQuizzesCache -
+// called on every checkbox toggle and select-mode flip, entirely
+// client-side, no API round trip.
+function renderDashboardList() {
+  const container = document.getElementById('quiz-list-container');
+  const bulkBar = document.getElementById('dash-bulk-bar');
+  const toggleBtn = document.getElementById('dash-select-toggle');
+  if (!container) return;
+
+  if (toggleBtn) {
+    toggleBtn.innerHTML = quizSelectMode ? `${icon('x', 14)} Cancel` : `${icon('check', 14)} Select`;
+  }
+
+  bulkBar.innerHTML = (quizSelectMode && selectedQuizIds.size > 0) ? `
+    <div class="card" style="margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; padding:14px 18px; flex-wrap:wrap; gap:10px;">
+      <span>${selectedQuizIds.size} selected</span>
+      <button class="btn btn-danger btn-sm" id="dash-bulk-delete">${icon('trash')} Delete selected</button>
+    </div>
+  ` : '';
+  const bulkDeleteBtn = document.getElementById('dash-bulk-delete');
+  if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', bulkDeleteSelectedQuizzes);
+
+  container.innerHTML = dashboardQuizzesCache.length ? dashboardQuizzesCache.map((q) => `
+    <div class="list-card ${quizSelectMode ? 'select-mode' : ''}" data-quiz-id="${q.id}">
+      ${quizSelectMode ? `<span class="dash-checkbox ${selectedQuizIds.has(q.id) ? 'checked' : ''}">${selectedQuizIds.has(q.id) ? icon('check', 13) : ''}</span>` : ''}
+      <div class="list-card-body">
         <div style="display:flex; align-items:center; gap:8px;">
           <div class="list-card-title">${escapeHtml(q.title)}</div>
-          <button class="btn btn-ghost btn-sm" title="Edit Title" data-quiz-id="${q.id}" data-quiz-title="${escapeHtml(q.title)}" onclick="event.stopPropagation(); editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
+          ${quizSelectMode ? '' : `<button class="btn btn-ghost btn-sm" title="Edit Title" data-quiz-id="${q.id}" data-quiz-title="${escapeHtml(q.title)}" onclick="event.stopPropagation(); editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>`}
         </div>
         <div class="list-card-meta">
           <span>${icon('paper', 14)} ${q.questionCount} questions</span>
@@ -383,7 +452,7 @@ async function renderTeacherDashboard() {
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="badge">${icon('key', 13)} ${q.code}</span>
-        <button class="btn btn-danger btn-sm" title="Delete Quiz" onclick="event.stopPropagation(); deleteQuiz('${q.id}')">${icon('trash')}</button>
+        ${quizSelectMode ? '' : `<button class="btn btn-icon btn-danger" title="Delete quiz" onclick="event.stopPropagation(); deleteQuiz('${q.id}')">${icon('trash')}</button>`}
       </div>
     </div>
   `).join('') : `
@@ -394,13 +463,29 @@ async function renderTeacherDashboard() {
     </div>
   `;
 
-  mainEl().innerHTML = `
-    <div class="row-between" style="margin-bottom: 20px;">
-      <h1 style="margin:0;">Your quizzes</h1>
-      <button class="btn btn-primary" onclick="go('teacher/new')">${icon('plus')} New quiz</button>
-    </div>
-    ${listHtml}
-  `;
+  // The checkbox is a plain styled <span>, not a real <input> - so
+  // there's only ever one click handler per card (this one) instead
+  // of a card handler AND a checkbox handler firing on the same
+  // click and toggling the selection twice.
+  container.querySelectorAll('.list-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.quizId;
+      if (quizSelectMode) {
+        if (selectedQuizIds.has(id)) selectedQuizIds.delete(id); else selectedQuizIds.add(id);
+        renderDashboardList();
+      } else {
+        go(`teacher/quiz/${id}`);
+      }
+    });
+  });
+}
+
+async function bulkDeleteSelectedQuizzes() {
+  const count = selectedQuizIds.size;
+  if (!count) return;
+  if (!confirm(`Delete ${count} quiz${count === 1 ? '' : 'zes'} and all of their responses? This cannot be undone.`)) return;
+  await Promise.all(Array.from(selectedQuizIds).map((id) => Api.deleteQuiz(id)));
+  renderTeacherDashboard();
 }
 
 // ---------------------------------------------------------------------
@@ -573,9 +658,9 @@ function renderTeacherNewQuiz() {
     errorEl.innerHTML = '';
     let parsed;
     try {
-      parsed = JSON.parse(document.getElementById('quiz-json').value);
+      parsed = parseQuizJsonInput(document.getElementById('quiz-json').value);
     } catch (err) {
-      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied the whole { ... } block, the most common cause is a straight " character left inside a question or option - that breaks the format.';
+      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied only the chatbot\'s reply (not the prompt itself, and not any text it wrote before or after the JSON), the most common cause is a straight " character left inside a question or option - that breaks the format.';
       return;
     }
     try {
@@ -586,6 +671,23 @@ function renderTeacherNewQuiz() {
       errorEl.innerHTML = `${escapeHtml(err.message)}${details}`;
     }
   });
+}
+
+// Chatbots don't always follow the "reply with ONLY raw JSON"
+// instruction - a ```json code fence, or a "Here's your quiz:" line
+// before it, is a common slip. Rather than hard-failing on that,
+// strip a wrapping code fence and fall back to just the outermost
+// {...} block before giving up and calling it invalid.
+function parseQuizJsonInput(raw) {
+  let text = (raw || '').trim();
+  const fenceMatch = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  if (!(text.startsWith('{') && text.endsWith('}'))) {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start !== -1 && end !== -1 && end > start) text = text.slice(start, end + 1);
+  }
+  return JSON.parse(text);
 }
 
 function copyPrompt() {
@@ -620,17 +722,15 @@ async function renderTeacherResults(quizId) {
   mainEl().innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher')">${icon('arrowLeft')} Back to quizzes</button>
 
-    <div class="row-between" style="align-items:flex-start;">
+    <div class="row-between" style="align-items:flex-start; flex-wrap:wrap; gap:14px;">
       <div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <h1 style="margin-bottom:4px;">${escapeHtml(quiz.title)}</h1>
-          <button class="btn btn-ghost btn-sm" data-quiz-id="${quiz.id}" data-quiz-title="${escapeHtml(quiz.title)}" onclick="editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
-        </div>
+        <h1 style="margin:0 0 4px;">${escapeHtml(quiz.title)}</h1>
         <p style="margin:0;">${escapeHtml(quiz.description || '')}</p>
       </div>
-      <div style="display:flex; gap:8px;">
-        <button class="btn btn-ghost btn-sm" onclick="go('teacher/quiz/${quiz.id}/edit')">${icon('paper')} Edit questions & answers</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteQuiz('${quiz.id}')">${icon('trash')} Delete</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" data-quiz-id="${quiz.id}" data-quiz-title="${escapeHtml(quiz.title)}" onclick="editQuizTitle(this)">${icon('paper', 12)} Edit Title</button>
+        <button class="btn btn-ghost btn-sm" onclick="go('teacher/quiz/${quiz.id}/edit')">${icon('paper')} Edit Questions</button>
+        <button class="btn btn-icon btn-danger" title="Delete quiz" onclick="deleteQuiz('${quiz.id}')">${icon('trash')}</button>
       </div>
     </div>
 
@@ -768,10 +868,17 @@ function toggleReview(id) {
 // changing anything.
 // ---------------------------------------------------------------------
 
-function qeditOptionRow(text, meaning, isCorrect) {
+// groupId scopes the radio's "name" to this one question, so the
+// browser handles mutual exclusion natively - picking a new correct
+// answer automatically unchecks the old one. Previously these radios
+// had no "name" at all, which meant every radio on the page was its
+// own independent group of one: a stray click could leave two
+// options "correct" with no way to click either back off, since a
+// lone unnamed radio can't be unchecked by clicking it again.
+function qeditOptionRow(text, meaning, isCorrect, groupId) {
   return `
   <div class="qedit-option-row">
-    <input type="radio" class="qedit-option-correct" ${isCorrect ? 'checked' : ''} title="Mark as the correct answer" />
+    <input type="radio" name="qedit-answer-${groupId}" class="qedit-option-correct" ${isCorrect ? 'checked' : ''} title="Mark as the correct answer" />
     <input class="input qedit-option-text" value="${escapeHtml(text)}" placeholder="Option text" />
     <input class="input qedit-option-meaning" value="${escapeHtml(meaning || '')}" placeholder="Meaning (optional)" />
     <button type="button" class="qedit-remove-row muted-link" title="Remove option">${icon('x', 14)}</button>
@@ -786,8 +893,23 @@ function qeditChunkRow(text) {
   </div>`;
 }
 
+// An alternate accepted word order, edited as one line of chunk text
+// separated by " / " - the teacher rearranges the same words rather
+// than picking from a list, and saveQuestionEdits() below splits on
+// "/" and matches each piece back to the real chunk text on save.
+function qeditAltOrderRow(text) {
+  return `
+  <div class="qedit-option-row">
+    <input class="input qedit-altorder-text" value="${escapeHtml(text)}" placeholder="e.g. 明天 (míngtiān) / 我 (wǒ) / 要 (yào) / 去 (qù) / 学校 (xuéxiào)" />
+    <button type="button" class="qedit-remove-row muted-link" title="Remove alternate order">${icon('x', 14)}</button>
+  </div>`;
+}
+
 function qeditCardHtml(q, qi) {
   if (q.type === 'sentence_reorder') {
+    // altOrders is stored server-side as chunk INDEX arrays; turn each
+    // one back into readable chunk text (joined with " / ") for editing.
+    const altOrderLines = (q.altOrders || []).map((order) => order.map((idx) => q.chunks[idx]).join(' / '));
     return `
     <div class="card qedit-card" data-question-id="${q.id}" data-question-type="sentence_reorder">
       <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span><span class="badge">Reorder</span></div>
@@ -799,20 +921,34 @@ function qeditCardHtml(q, qi) {
         <label>English meaning (optional hint)</label>
         <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
       </div>
-      <div class="field" style="margin-bottom:0;">
+      <div class="field">
         <label>Chunks, in the CORRECT order - this is the answer key</label>
         <div class="qedit-option-list qedit-chunk-list">
           ${q.chunks.map((c) => qeditChunkRow(c)).join('')}
         </div>
         <button type="button" class="btn btn-ghost btn-sm qedit-add-chunk" style="margin-top:8px;">${icon('plus')} Add chunk</button>
       </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Alternate accepted orders (optional) - only add one if Mandarin genuinely allows these same chunks in a different order (e.g. a time word moved to the front). Separate chunks with " / ", using the exact text from above.</label>
+        <div class="qedit-option-list qedit-altorder-list">
+          ${altOrderLines.map((line) => qeditAltOrderRow(line)).join('')}
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm qedit-add-altorder" style="margin-top:8px;">${icon('plus')} Add alternate order</button>
+      </div>
     </div>`;
   }
+  // Covers both multiple_choice and listening_dictation - they share
+  // the same options/answer editing UI. data-question-type is read
+  // from the actual question type (not hardcoded) so a listening
+  // question stays a listening question after a save.
   return `
-  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="multiple_choice">
-    <div class="qedit-head"><span class="qedit-number">Q${qi + 1}</span></div>
+  <div class="card qedit-card" data-question-id="${q.id}" data-question-type="${q.type}">
+    <div class="qedit-head">
+      <span class="qedit-number">Q${qi + 1}</span>
+      ${q.type === 'listening_dictation' ? '<span class="badge">Listening</span>' : ''}
+    </div>
     <div class="field">
-      <label>Question</label>
+      <label>Question${q.type === 'listening_dictation' ? ' (shown before the audio plays)' : ''}</label>
       <input class="input qedit-question" value="${escapeHtml(q.question)}" />
     </div>
     <div class="field">
@@ -820,9 +956,9 @@ function qeditCardHtml(q, qi) {
       <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
     </div>
     <div class="field" style="margin-bottom:0;">
-      <label>Options - the selected dot is the correct answer</label>
+      <label>Options - the selected dot is the correct answer${q.type === 'listening_dictation' ? ', and the text spoken aloud' : ''}</label>
       <div class="qedit-option-list">
-        ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer)).join('')}
+        ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer, q.id)).join('')}
       </div>
       <button type="button" class="btn btn-ghost btn-sm qedit-add-option" style="margin-top:8px;">${icon('plus')} Add option</button>
     </div>
@@ -854,12 +990,18 @@ async function renderTeacherEditQuestions(quizId) {
   wrapper.addEventListener('click', (e) => {
     const addOptBtn = e.target.closest('.qedit-add-option');
     if (addOptBtn) {
-      addOptBtn.closest('.qedit-card').querySelector('.qedit-option-list').insertAdjacentHTML('beforeend', qeditOptionRow('', '', false));
+      const card = addOptBtn.closest('.qedit-card');
+      card.querySelector('.qedit-option-list').insertAdjacentHTML('beforeend', qeditOptionRow('', '', false, card.dataset.questionId));
       return;
     }
     const addChunkBtn = e.target.closest('.qedit-add-chunk');
     if (addChunkBtn) {
       addChunkBtn.closest('.qedit-card').querySelector('.qedit-chunk-list').insertAdjacentHTML('beforeend', qeditChunkRow(''));
+      return;
+    }
+    const addAltOrderBtn = e.target.closest('.qedit-add-altorder');
+    if (addAltOrderBtn) {
+      addAltOrderBtn.closest('.qedit-card').querySelector('.qedit-altorder-list').insertAdjacentHTML('beforeend', qeditAltOrderRow(''));
       return;
     }
     const removeBtn = e.target.closest('.qedit-remove-row');
@@ -895,7 +1037,11 @@ async function saveQuestionEdits(quizId, wrapper, saveBtn) {
 
     if (type === 'sentence_reorder') {
       const chunks = Array.from(card.querySelectorAll('.qedit-option-text')).map((el) => el.value.trim()).filter(Boolean);
-      return { id, type, question, questionMeaning, chunks };
+      const altOrders = Array.from(card.querySelectorAll('.qedit-altorder-text'))
+        .map((el) => el.value.trim())
+        .filter(Boolean)
+        .map((line) => line.split('/').map((s) => s.trim()).filter(Boolean));
+      return { id, type, question, questionMeaning, chunks, altOrders };
     }
 
     const options = [];
@@ -1038,7 +1184,11 @@ function renderStudentQuiz() {
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
   const answered = !!state.studentAnswers[q.id];
 
-  const answerAreaHtml = q.type === 'sentence_reorder' ? renderReorderArea(q) : renderMultipleChoiceArea(q, hintUsed);
+  const answerAreaHtml = q.type === 'sentence_reorder'
+    ? renderReorderArea(q)
+    : q.type === 'listening_dictation'
+      ? renderListeningArea(q, hintUsed)
+      : renderMultipleChoiceArea(q, hintUsed);
 
   // Two-step answering: picking an option only highlights it and can
   // still be changed. The first press of the primary button checks it
@@ -1111,6 +1261,7 @@ function renderStudentQuiz() {
 
   if (q.type === 'sentence_reorder') bindReorderEvents(q);
   else bindMultipleChoiceEvents(q);
+  if (q.type === 'listening_dictation') bindListeningEvents(q);
 
   const hintBtn = document.getElementById('hint-lamp-btn');
   if (!answered) {
@@ -1176,6 +1327,32 @@ function selectOption(questionId, value) {
   const hintUsed = !!state.studentHintsUsed[questionId];
   state.studentAnswers[questionId] = { value, usedMeaning: hintUsed, answeredAtMs, correct: null, checked: false };
   renderStudentQuiz();
+}
+
+// Listening dictation - a "Play audio" button on top of the ordinary
+// multiple-choice option list. The target text is never shown as
+// text; the student only ever hears it via speechSynthesis and picks
+// the matching option, so this reuses renderMultipleChoiceArea and
+// bindMultipleChoiceEvents underneath rather than duplicating them.
+function renderListeningArea(q, hintUsed) {
+  return `
+    <div class="listening-audio-row">
+      <button type="button" class="btn btn-ghost btn-sm" id="listen-play-btn">🔊 Play audio</button>
+      <span class="muted-link" style="font-size:13px;">Tap as many times as you need</span>
+    </div>
+    ${renderMultipleChoiceArea(q, hintUsed)}
+  `;
+}
+
+function bindListeningEvents(q) {
+  const playBtn = document.getElementById('listen-play-btn');
+  const speak = () => speakMandarin(q.audioText);
+  if (playBtn) playBtn.addEventListener('click', speak);
+  // Auto-play once when the question first loads, so the student
+  // doesn't have to tap before hearing anything. Skipped once an
+  // answer already exists, so re-renders (picking an option, showing
+  // the hint) don't replay it on top of itself.
+  if (!state.studentAnswers[q.id]) speak();
 }
 
 function renderReorderArea(q) {

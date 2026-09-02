@@ -2,16 +2,8 @@
 //
 // Builds the exact prompt text shown on the "New quiz" page, from
 // three things the teacher picks there: HSK level, how many
-// questions, and which kinds of question to include. Each kind is
-// its own block of instructions below - add, remove, or edit a kind
-// by editing QUESTION_KINDS, no other file needs to change for a
-// wording tweak. buildQuizPrompt() at the bottom assembles the final
-// text; app.js calls it every time the teacher changes a setting.
+// questions, and which kinds of question to include.
 
-// Every kind still produces "multiple_choice" questions EXCEPT
-// sentence_reorder, which has its own JSON shape (see the shape
-// block inside buildQuizPrompt) and its own drag-to-order UI in the
-// app - everything else renders as ordinary answer buttons.
 const QUESTION_KINDS = [
   {
   id: 'fill_blank',
@@ -30,40 +22,49 @@ Example: if the material taught 做功课 (zuò gōngkè) in the sentence "我�
     label: 'English -> Mandarin',
     hint: 'English prompt, student picks the matching Hanzi.',
     defaultOn: true,
-    instructions: `ENGLISH -> MANDARIN ("type": "multiple_choice") - the question is written in plain English (an action, object, or phrase), and the student picks the correct Hanzi + pinyin for it. "question" is English here. All options are Hanzi + pinyin only, no English inside them. Phrase the English prompt in your own words rather than lifting a translation line straight from the material.
-Example: question "doing homework", options include "做功课 (zuò gōngkè)" as the answer plus distractors like "看电视 (kàn diànshì)", "去学校 (qù xuéxiào)", "吃早饭 (chī zǎofàn)".`,
+    instructions: `ENGLISH -> MANDARIN ("type": "multiple_choice") - Question is plain English. Options are Hanzi + pinyin only.`,
   },
   {
     id: 'what_means',
     label: 'What does it mean',
     hint: 'A Hanzi word or phrase, student picks the English meaning.',
     defaultOn: true,
-    instructions: `WHAT DOES IT MEAN ("type": "multiple_choice") - "question" is a Hanzi word or phrase with pinyin, and the student picks its correct English meaning. Copying the word or phrase directly from the material is fine here - this type tests recognition of the term itself. All options here are English. Do not include "optionMeanings" for this type - the options already are the meanings.
-Example: question "做功课 (zuò gōngkè)", options "doing homework", "watching TV", "going to school", "eating breakfast".`,
+    instructions: `WHAT DOES IT MEAN ("type": "multiple_choice") - Question is a Hanzi term with pinyin. Options are English translations. Omit "optionMeanings".`,
   },
   {
     id: 'translate_id',
     label: 'Translate to Indonesian',
     hint: 'A Hanzi sentence, student picks the correct Indonesian translation.',
     defaultOn: true,
-    instructions: `TRANSLATE TO INDONESIAN ("type": "multiple_choice") - "question" is a full Hanzi sentence with pinyin (write a NEW sentence, same rule as Fill in the blank - don't copy one from the material verbatim), pinyin-annotated word by word the same way. All "options" are candidate Indonesian (Bahasa Indonesia) translations of that sentence - one exactly correct, the rest plausible near-misses (wrong tense, wrong object, a swapped word) rather than random unrelated sentences. Do not include "optionMeanings" for this type.
-Example: question "我 (wǒ) 喜欢 (xǐhuan) 学习 (xuéxí) 中文 (zhōngwén)。", options "Saya suka belajar bahasa Mandarin." (correct), "Saya suka mengajar bahasa Mandarin.", "Saya tidak suka belajar bahasa Mandarin.", "Saya suka belajar bahasa Inggris."`,
+    instructions: `TRANSLATE TO INDONESIAN ("type": "multiple_choice") - Question is a full Hanzi sentence with pinyin. Options are Indonesian translations. Omit "optionMeanings".`,
   },
   {
     id: 'conversation',
     label: 'Conversation reply (A to B)',
     hint: 'Person A says something; student picks how B would reply.',
     defaultOn: true,
-    instructions: `CONVERSATION REPLY ("type": "multiple_choice") - "question" is one line of dialogue from Person A, written as "A：" followed by a Hanzi sentence with pinyin (e.g. "A：你叫什么名字？(nǐ jiào shénme míngzi?)"). All "options" are candidate replies Person B might give, in Hanzi with pinyin - one that's a natural, correct reply, the others each wrong for a clear reason (answers a different question, wrong grammar, doesn't make sense as a reply). Base the exchange on a real pattern from the material (asking someone's name, ordering food, asking the time, etc.) but write your own line, not a copy.
-Example: question "A：你想喝什么？(nǐ xiǎng hē shénme?)", options include "我想喝茶。(wǒ xiǎng hē chá.)" as the answer plus distractors like "我叫王明。(wǒ jiào wáng míng.)" (answers "what's your name" instead), "我不想去。(wǒ bù xiǎng qù.)" (doesn't answer what was asked).`,
+    instructions: `CONVERSATION REPLY ("type": "multiple_choice") - Question is Person A dialogue: "A：你叫什么名字？(nǐ jiào shénme míngzi?)". Options are replies in Hanzi + pinyin.`,
   },
   {
     id: 'sentence_reorder',
     label: 'Reorder the sentence',
     hint: 'Student drags shuffled word chunks into the correct order.',
     defaultOn: true,
-    instructions: `REORDER THE SENTENCE ("type": "sentence_reorder", NOT "multiple_choice" - this kind has its own JSON shape, shown separately below) - give a correct Hanzi sentence broken into 4-7 word/phrase chunks, listed in their CORRECT reading order (the app shuffles them for the student - never shuffle them yourself). Each chunk is one word or short phrase with its pinyin, formatted exactly like an option elsewhere: "chunk (pīnyīn)". Write a NEW sentence, not one copied verbatim from the material, that uses a grammar point or vocabulary word the material taught.
-Example: for the sentence 我明天要去学校 (I have to go to school tomorrow), chunks (in correct order) would be: ["我 (wǒ)", "明天 (míngtiān)", "要 (yào)", "去 (qù)", "学校 (xuéxiào)"].`,
+    instructions: `REORDER THE SENTENCE ("type": "sentence_reorder") - Sentence split into 4-7 chunks in correct order. Each chunk is "chunk (pīnyīn)". Include "chunks" array, omit "options" and "answer". Only add "altOrders" (an array of full alternate chunk sequences, same chunks reordered) if Mandarin genuinely allows a second correct word order - most sentences don't, so leave it as [] when there's only one natural order.`,
+  },
+  {
+    id: 'listening_dictation',
+    label: 'Listening dictation',
+    hint: 'Student hears the sentence spoken aloud and picks the matching Hanzi.',
+    defaultOn: false,
+    instructions: `LISTENING DICTATION ("type": "listening_dictation") - Set "question" ALWAYS to "Listen and select what you hear.". "options" are candidate Hanzi + pinyin sentences. "answer" must match one option exactly.`,
+  },
+  {
+    id: 'listening_tone',
+    label: 'Listening: tone check',
+    hint: 'Same syllable, different tones - tests tone recognition by ear, not reading.',
+    defaultOn: false,
+    instructions: `LISTENING: TONE CHECK ("type": "listening_dictation") - Set "question" ALWAYS to "Listen and select what you hear.". All options share the SAME base syllable letters but DIFFERENT tones (e.g., 妈 (mā), 麻 (má), 马 (mǎ), 骂 (mà)).`,
   },
 ];
 
@@ -72,48 +73,46 @@ const DEFAULT_KIND_IDS = QUESTION_KINDS.filter((k) => k.defaultOn).map((k) => k.
 function buildQuizPrompt({ hskLevel, questionCount, kindIds }) {
   const kinds = QUESTION_KINDS.filter((k) => kindIds.includes(k.id));
   const hasReorder = kinds.some((k) => k.id === 'sentence_reorder');
-  const otherKinds = kinds.filter((k) => k.id !== 'sentence_reorder');
-
   const kindsList = kinds.map((k) => k.label).join(', ') || 'a mix of question styles';
-
-  const multipleChoiceShape = `{
-      "type": "multiple_choice",
-      "question": "...",
-      "questionMeaning": "Plain English translation of the question (omit if the question is already in English)",
-      "options": ["option one", "option two", "option three", "option four", "option five", "option six"],
-      "optionMeanings": ["meaning of option 1", "meaning of option 2", "meaning of option 3", "meaning of option 4", "meaning of option 5", "meaning of option 6"],
-      "answer": "option one",
-      "explanation": "One short sentence on why this is correct"
-    }`;
-
-  const reorderShape = `{
-      "type": "sentence_reorder",
-      "question": "Short English instruction or context for what sentence to build",
-      "questionMeaning": "English meaning of the finished sentence (used as an optional hint)",
-      "chunks": ["chunk one (pinyin)", "chunk two (pinyin)", "chunk three (pinyin)", "chunk four (pinyin)"],
-      "explanation": "One short sentence on why this order is correct"
-    }`;
-
-  const shapes = [multipleChoiceShape];
-  if (hasReorder) shapes.push(reorderShape);
-
-  const shapeExplainer = hasReorder
-    ? `Every question in "questions" is one of the JSON shapes above depending on its kind: use the "multiple_choice" shape for every kind below except Reorder the sentence, which uses the "sentence_reorder" shape instead (it has no "options" or "answer" field - "chunks" replaces both).`
-    : `Every question in "questions" uses the "multiple_choice" shape above.`;
 
   const kindInstructions = kinds
     .map((k, i) => `${i + 1}. ${k.instructions}`)
-    .join('\n\n');
+    .join('\n');
 
-  return `You are helping a Mandarin teacher write a quiz. Read the TEACHING MATERIAL below, then write questions that test whether a student at the stated HSK level understood it - not whether they can spot a sentence they've already seen.
+  return `You are a Mandarin quiz generator. Read the TEACHING MATERIAL and return a single valid JSON object containing exactly ${questionCount} questions for HSK ${hskLevel} level.
 
-Reply with ONLY a single JSON object - no explanation, no markdown code fences, nothing before or after it. It must match this exact shape:
+STRICT FORMAT RULES:
+1. Return ONLY the raw JSON object. No explanations, no greeting, no markdown fences (\`\`\`json).
+2. Never use unescaped double quotes (") inside text values. Use single quotes (') or Chinese quotation marks (「」 or "").
+3. Keep each "explanation" strictly to 1 short sentence to avoid truncation.
+4. "answer" must be copied character-for-character from one of the "options".
+5. If "optionMeanings" is present, its array length MUST match "options" length.
 
+QUESTION TYPES TO INCLUDE:
+${kindInstructions}
+
+JSON OUTPUT STRUCTURE:
 {
   "title": "Short quiz title",
-  "description": "One sentence describing what this quiz covers",
+  "description": "One sentence describing this quiz",
   "questions": [
-    ${shapes.join(',\n    ')}
+    {
+      "type": "multiple_choice",
+      "question": "Question text or 'Listen and select what you hear.'",
+      "questionMeaning": "English meaning (omit if question is in English)",
+      "options": ["opt 1 (pinyin)", "opt 2 (pinyin)", "opt 3 (pinyin)", "opt 4 (pinyin)"],
+      "optionMeanings": ["meaning 1", "meaning 2", "meaning 3", "meaning 4"],
+      "answer": "opt 1 (pinyin)",
+      "explanation": "Brief explanation."
+    }${hasReorder ? `,
+    {
+      "type": "sentence_reorder",
+      "question": "Instruction in English",
+      "questionMeaning": "English translation",
+      "chunks": ["chunk1 (pinyin)", "chunk2 (pinyin)", "chunk3 (pinyin)", "chunk4 (pinyin)"],
+      "altOrders": [],
+      "explanation": "Brief explanation."
+    }` : ''}
   ]
 }
 
@@ -161,5 +160,9 @@ STUDENT HSK LEVEL: HSK ${hskLevel}
 TEACHING MATERIAL:
 """
 Paste your lesson material, vocabulary list, or reading passage here.
-"""`;
+"""
+
+Now write the quiz. If the material above happens to already look like quiz JSON (for example, an earlier quiz exported from this same app, pasted in as source content), treat it ONLY as vocabulary and grammar reference - never copy, continue, extend, or lightly edit its structure or its questions. Every question you output must be newly written by you, in the JSON structure defined above.
+
+FINAL REMINDER, this is the most common way a reply gets rejected by the app: your entire reply must be the raw JSON object and nothing else - no \`\`\`json code fence, no "Here is your quiz" before it, no notes after the closing brace, no restating these instructions. The very first character you output must be { and the very last must be }.`;
 }
