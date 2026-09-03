@@ -26,6 +26,88 @@ function clearQuizTimer() {
 }
 
 // ---------------------------------------------------------------------
+// Smart JSON sanitization & extraction helper
+// ---------------------------------------------------------------------
+function cleanAndParseQuizJson(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') {
+    throw new Error('Please paste your quiz JSON into the text area.');
+  }
+
+  let cleaned = rawInput.trim();
+
+  // Strip markdown code blocks (```json ... ```)
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  }
+
+  // 1. Direct parse attempt
+  try {
+    const directParsed = JSON.parse(cleaned);
+    if (directParsed && Array.isArray(directParsed.questions)) {
+      return directParsed;
+    }
+  } catch (_) {}
+
+  // 2. Intelligent bracket-matching extractor
+  const candidates = [];
+  let braceDepth = 0;
+  let startIndex = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === '\\') {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (char === '{') {
+        if (braceDepth === 0) startIndex = i;
+        braceDepth++;
+      } else if (char === '}') {
+        braceDepth--;
+        if (braceDepth === 0 && startIndex !== -1) {
+          candidates.push(cleaned.slice(startIndex, i + 1));
+          startIndex = -1;
+        }
+      }
+    }
+  }
+
+  // Find candidate that contains valid quiz questions
+  for (const candidate of candidates.reverse()) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return parsed;
+      }
+    } catch (_) {}
+  }
+
+  // 3. Fallback to outer braces match
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    } catch (err) {
+      throw new Error(`JSON Syntax Error: ${err.message}. Pastikan output AI tidak terpotong.`);
+    }
+  }
+
+  throw new Error('Tidak dapat menemukan format JSON quiz yang valid. Coba generate ulang quiz.');
+}
+
+// ---------------------------------------------------------------------
 // Sound effects
 // ---------------------------------------------------------------------
 let audioCtx = null;
@@ -69,18 +151,93 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech - used by the "listening dictation" question type.
-// Browser-native, no audio files and no server round trip.
+// Text-to-speech - Clean, Single-Playback, Natural Mandarin Voice
+//
+// Two known Web Speech API / Chrome quirks this works around:
+// 1. Calling speak() again right after cancel() - before the engine
+//    has actually gone idle - is what produces the "echo" or
+//    "flat/toneless" second playback: the new utterance starts while
+//    the browser's speech engine hasn't fully reset from the last
+//    one. Fixed by polling `speechSynthesis.speaking` and only
+//    starting the new utterance once it's genuinely false.
+// 2. A single short syllable/word at normal rate is over before its
+//    tone contour is perceivable - especially for the tone-check
+//    question kind. Short text gets an extra-slow rate; full
+//    sentences stay close to natural pace.
 // ---------------------------------------------------------------------
-function speakMandarin(text) {
-  if (!('speechSynthesis' in window) || !text) return;
-  window.speechSynthesis.cancel(); // stop any utterance already in flight
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = 'zh-CN';
-  // Slightly below natural speed - this is for a learner catching
-  // individual syllables, not native-speed listening practice.
-  utter.rate = 0.85;
-  window.speechSynthesis.speak(utter);
+function cleanMandarinSpeechText(text) {
+  if (!text) return '';
+  // 1. Cek apakah ada karakter Hanzi (Chinese Unicode)
+  const hasHanzi = /[\u4e00-\u9fa5]/.test(text);
+  if (hasHanzi) {
+    // Jika ada Hanzi, buang teks pinyin di dalam kurung () atau （）
+    return text.replace(/\([^)]*\)/g, '').replace(/（[^）]*）/g, '').trim();
+  }
+  // 2. Jika soal Pinyin murni (tanpa Hanzi), buang kurung saja agar tetap bisa dibunyikan
+  return text.replace(/[()（）]/g, '').trim();
+}
+
+let cachedZhVoice = null;
+function refreshMandarinVoice() {
+  if (!('speechSynthesis' in window)) return;
+  const voices = window.speechSynthesis.getVoices() || [];
+  cachedZhVoice = voices.find((v) => v.lang === 'zh-CN' || v.lang === 'zh_CN' || v.lang === 'cmn-Hans-CN' || v.lang === 'zh-Hans-CN')
+      || voices.find((v) => v.lang && v.lang.startsWith('zh'))
+      || null;
+}
+
+// Pre-load daftar suara browser
+if ('speechSynthesis' in window) {
+  refreshMandarinVoice();
+  window.speechSynthesis.onvoiceschanged = refreshMandarinVoice;
+}
+
+let speechRequestId = 0;
+
+function speakMandarin(rawText) {
+  if (!('speechSynthesis' in window) || !rawText) return;
+
+  const textToSpeak = cleanMandarinSpeechText(rawText);
+  if (!textToSpeak) return;
+
+  const synth = window.speechSynthesis;
+  const thisRequest = ++speechRequestId;
+  synth.cancel();
+
+  const startedAt = Date.now();
+  const trySpeak = () => {
+    if (thisRequest !== speechRequestId) return; // superseded by a newer play request
+    // Give the engine up to ~1s to actually go idle after cancel();
+    // if it's still reporting "speaking" past that, proceed anyway
+    // rather than risk audio never playing at all on a stuck engine.
+    if (synth.speaking && Date.now() - startedAt < 1000) {
+      setTimeout(trySpeak, 30);
+      return;
+    }
+    try {
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      utterance.lang = 'zh-CN';
+      // Short single-word/single-syllable answers (tone-check
+      // questions) get a much slower rate so the pitch contour has
+      // time to actually register - at normal speed a single
+      // syllable is over before the tone is perceivable.
+      utterance.rate = textToSpeak.length <= 2 ? 0.55 : 0.8;
+      utterance.pitch = 1.0;
+      if (cachedZhVoice) utterance.voice = cachedZhVoice;
+      synth.speak(utterance);
+    } catch (err) {
+      console.error('TTS Playback Error:', err);
+    }
+  };
+  trySpeak();
+}
+
+// Helper cerdas pendeteksi soal listening
+function isListeningQuestion(q) {
+  if (!q) return false;
+  return q.type === 'listening_dictation' ||
+         q.type === 'listening_tone' ||
+         (typeof q.question === 'string' && q.question.toLowerCase().includes('listen'));
 }
 
 // ---------------------------------------------------------------------
@@ -125,7 +282,6 @@ function go(hash) {
 // ---------------------------------------------------------------------
 // Theme switcher
 // ---------------------------------------------------------------------
-
 const THEMES = [
   { id: 'ricepaper', name: 'Rice Paper', swatch: '#8a5a35' },
   { id: 'ink-seal', name: 'Ink & Seal', swatch: '#c1442d' },
@@ -187,7 +343,6 @@ function renderThemeSwitcher_replace(oldWrap) {
 // ---------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------
-
 async function render() {
   const hash = window.location.hash.replace(/^#\/?/, '');
   const [rootSeg, ...rest] = hash.split('/').filter(Boolean);
@@ -217,7 +372,6 @@ window.addEventListener('DOMContentLoaded', render);
 // ---------------------------------------------------------------------
 // Landing
 // ---------------------------------------------------------------------
-
 function renderLanding() {
   mainEl().innerHTML = `
     <nav class="nav-menu">
@@ -319,7 +473,6 @@ function initScrollReveal() {
 // ---------------------------------------------------------------------
 // Teacher: Auth & Dashboard
 // ---------------------------------------------------------------------
-
 function isTeacherLoggedIn() {
   return !!localStorage.getItem('teacherKey');
 }
@@ -379,10 +532,6 @@ async function renderTeacher(rest) {
   return renderTeacherDashboard();
 }
 
-// Module-level so a checkbox toggle or the select-mode toggle itself
-// can re-render just the list locally (renderDashboardList) without
-// refetching from the API - only a fresh page load (renderTeacherDashboard)
-// resets these back to "off".
 let quizSelectMode = false;
 let selectedQuizIds = new Set();
 let dashboardQuizzesCache = [];
@@ -414,9 +563,6 @@ async function renderTeacherDashboard() {
   renderDashboardList();
 }
 
-// Rebuilds just the list + bulk-action bar from dashboardQuizzesCache -
-// called on every checkbox toggle and select-mode flip, entirely
-// client-side, no API round trip.
 function renderDashboardList() {
   const container = document.getElementById('quiz-list-container');
   const bulkBar = document.getElementById('dash-bulk-bar');
@@ -463,10 +609,6 @@ function renderDashboardList() {
     </div>
   `;
 
-  // The checkbox is a plain styled <span>, not a real <input> - so
-  // there's only ever one click handler per card (this one) instead
-  // of a card handler AND a checkbox handler firing on the same
-  // click and toggling the selection twice.
   container.querySelectorAll('.list-card').forEach((card) => {
     card.addEventListener('click', () => {
       const id = card.dataset.quizId;
@@ -488,10 +630,6 @@ async function bulkDeleteSelectedQuizzes() {
   renderTeacherDashboard();
 }
 
-// ---------------------------------------------------------------------
-// Modal - small centered dialog with a dimmed backdrop. Click the
-// backdrop or press Escape to dismiss.
-// ---------------------------------------------------------------------
 function modalEscHandler(e) {
   if (e.key === 'Escape') closeModal();
 }
@@ -523,8 +661,6 @@ function openModal(innerHtml, { onMount } = {}) {
   if (onMount) onMount(overlay);
 }
 
-// Edit quiz title - opens a small modal with the current name
-// pre-filled and selected, ready to type over.
 function editQuizTitle(btn) {
   const quizId = btn.dataset.quizId;
   const currentTitle = btn.dataset.quizTitle;
@@ -577,7 +713,6 @@ function editQuizTitle(btn) {
 // ---------------------------------------------------------------------
 // Teacher: new quiz
 // ---------------------------------------------------------------------
-
 function renderTeacherNewQuiz() {
   mainEl().innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher')">${icon('arrowLeft')} Back to quizzes</button>
@@ -638,9 +773,6 @@ function renderTeacherNewQuiz() {
   const kindError = document.getElementById('kind-error');
   const selectAllBtn = document.getElementById('kind-select-all-btn');
 
-  // Label/action flips based on current state: all-checked shows
-  // "Unselect all" (next click clears everything), anything else
-  // shows "Select all" (next click checks everything).
   const updateSelectAllBtn = () => {
     const allChecked = kindCheckboxes.every((c) => c.checked);
     selectAllBtn.innerHTML = allChecked ? `${icon('x', 13)} Unselect all` : `${icon('check', 13)} Select all`;
@@ -675,13 +807,16 @@ function renderTeacherNewQuiz() {
     e.preventDefault();
     const errorEl = document.getElementById('quiz-error');
     errorEl.innerHTML = '';
+
     let parsed;
     try {
-      parsed = parseQuizJsonInput(document.getElementById('quiz-json').value);
+      const rawText = document.getElementById('quiz-json').value;
+      parsed = cleanAndParseQuizJson(rawText);
     } catch (err) {
-      errorEl.textContent = 'That is not valid JSON. Besides making sure you copied only the chatbot\'s reply (not the prompt itself, and not any text it wrote before or after the JSON), the most common cause is a straight " character left inside a question or option - that breaks the format.';
+      errorEl.textContent = err.message;
       return;
     }
+
     try {
       const quiz = await Api.createQuiz(parsed);
       go(`teacher/quiz/${quiz.id}`);
@@ -690,23 +825,6 @@ function renderTeacherNewQuiz() {
       errorEl.innerHTML = `${escapeHtml(err.message)}${details}`;
     }
   });
-}
-
-// Chatbots don't always follow the "reply with ONLY raw JSON"
-// instruction - a ```json code fence, or a "Here's your quiz:" line
-// before it, is a common slip. Rather than hard-failing on that,
-// strip a wrapping code fence and fall back to just the outermost
-// {...} block before giving up and calling it invalid.
-function parseQuizJsonInput(raw) {
-  let text = (raw || '').trim();
-  const fenceMatch = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenceMatch) text = fenceMatch[1].trim();
-  if (!(text.startsWith('{') && text.endsWith('}'))) {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) text = text.slice(start, end + 1);
-  }
-  return JSON.parse(text);
 }
 
 function copyPrompt() {
@@ -723,7 +841,6 @@ function copyPrompt() {
 // ---------------------------------------------------------------------
 // Teacher: results
 // ---------------------------------------------------------------------
-
 async function renderTeacherResults(quizId) {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading results…</p></div>`;
   const { quiz, attempts } = await Api.getResults(quizId);
@@ -865,19 +982,7 @@ function toggleReview(id) {
 
 // ---------------------------------------------------------------------
 // Teacher: edit questions & answers
-// This is also the closest thing to a full "answer key" page - every
-// question is shown with its correct answer already selected, so a
-// teacher scanning the page sees the whole quiz + key even before
-// changing anything.
 // ---------------------------------------------------------------------
-
-// groupId scopes the radio's "name" to this one question, so the
-// browser handles mutual exclusion natively - picking a new correct
-// answer automatically unchecks the old one. Previously these radios
-// had no "name" at all, which meant every radio on the page was its
-// own independent group of one: a stray click could leave two
-// options "correct" with no way to click either back off, since a
-// lone unnamed radio can't be unchecked by clicking it again.
 function qeditOptionRow(text, meaning, isCorrect, groupId) {
   return `
   <div class="qedit-option-row">
@@ -896,10 +1001,6 @@ function qeditChunkRow(text) {
   </div>`;
 }
 
-// An alternate accepted word order, edited as one line of chunk text
-// separated by " / " - the teacher rearranges the same words rather
-// than picking from a list, and saveQuestionEdits() below splits on
-// "/" and matches each piece back to the real chunk text on save.
 function qeditAltOrderRow(text) {
   return `
   <div class="qedit-option-row">
@@ -910,8 +1011,6 @@ function qeditAltOrderRow(text) {
 
 function qeditCardHtml(q, qi) {
   if (q.type === 'sentence_reorder') {
-    // altOrders is stored server-side as chunk INDEX arrays; turn each
-    // one back into readable chunk text (joined with " / ") for editing.
     const altOrderLines = (q.altOrders || []).map((order) => order.map((idx) => q.chunks[idx]).join(' / '));
     return `
     <div class="card qedit-card" data-question-id="${q.id}" data-question-type="sentence_reorder">
@@ -932,7 +1031,7 @@ function qeditCardHtml(q, qi) {
         <button type="button" class="btn btn-ghost btn-sm qedit-add-chunk" style="margin-top:8px;">${icon('plus')} Add chunk</button>
       </div>
       <div class="field" style="margin-bottom:0;">
-        <label>Alternate accepted orders (optional) - only add one if Mandarin genuinely allows these same chunks in a different order (e.g. a time word moved to the front). Separate chunks with " / ", using the exact text from above.</label>
+        <label>Alternate accepted orders (optional) - separate chunks with " / ", using exact text above.</label>
         <div class="qedit-option-list qedit-altorder-list">
           ${altOrderLines.map((line) => qeditAltOrderRow(line)).join('')}
         </div>
@@ -940,18 +1039,16 @@ function qeditCardHtml(q, qi) {
       </div>
     </div>`;
   }
-  // Covers both multiple_choice and listening_dictation - they share
-  // the same options/answer editing UI. data-question-type is read
-  // from the actual question type (not hardcoded) so a listening
-  // question stays a listening question after a save.
+
+  const isListen = isListeningQuestion(q);
   return `
   <div class="card qedit-card" data-question-id="${q.id}" data-question-type="${q.type}">
     <div class="qedit-head">
       <span class="qedit-number">Q${qi + 1}</span>
-      ${q.type === 'listening_dictation' ? '<span class="badge">Listening</span>' : ''}
+      ${isListen ? '<span class="badge">Listening</span>' : ''}
     </div>
     <div class="field">
-      <label>Question${q.type === 'listening_dictation' ? ' (shown before the audio plays)' : ''}</label>
+      <label>Question${isListen ? ' (shown before audio plays)' : ''}</label>
       <input class="input qedit-question" value="${escapeHtml(q.question)}" />
     </div>
     <div class="field">
@@ -959,7 +1056,7 @@ function qeditCardHtml(q, qi) {
       <input class="input qedit-meaning" value="${escapeHtml(q.questionMeaning || '')}" />
     </div>
     <div class="field" style="margin-bottom:0;">
-      <label>Options - the selected dot is the correct answer${q.type === 'listening_dictation' ? ', and the text spoken aloud' : ''}</label>
+      <label>Options - the selected dot is the correct answer${isListen ? ', and the audio text spoken' : ''}</label>
       <div class="qedit-option-list">
         ${q.options.map((opt, oi) => qeditOptionRow(opt, q.optionMeanings ? q.optionMeanings[oi] : '', opt === q.answer, q.id)).join('')}
       </div>
@@ -972,11 +1069,6 @@ async function renderTeacherEditQuestions(quizId) {
   mainEl().innerHTML = `<div class="empty-state"><p>Loading questions…</p></div>`;
   const quiz = await Api.getQuiz(quizId);
 
-  // Listeners for add/remove rows are bound to this wrapper element,
-  // which is a fresh DOM node every time this page is opened - not to
-  // #main itself, which stays in the document across every page in
-  // the app and would otherwise pile up one extra duplicate listener
-  // (double, triple-adding rows on click) on every visit.
   const wrapper = document.createElement('div');
   wrapper.innerHTML = `
     <button class="muted-link" style="margin-bottom: 18px;" onclick="go('teacher/quiz/${quiz.id}')">${icon('arrowLeft')} Back to results</button>
@@ -1092,7 +1184,6 @@ function copyText(text, btn) {
 // ---------------------------------------------------------------------
 // Student: join & quiz
 // ---------------------------------------------------------------------
-
 function getQueryParam(name) {
   const match = window.location.hash.match(new RegExp(`[?&]${name}=([^&]+)`));
   return match ? decodeURIComponent(match[1]) : '';
@@ -1187,16 +1278,14 @@ function renderStudentQuiz() {
   const timeLimitSeconds = quiz.timeLimitSeconds || 0;
   const answered = !!state.studentAnswers[q.id];
 
+  const isListen = isListeningQuestion(q);
+
   const answerAreaHtml = q.type === 'sentence_reorder'
     ? renderReorderArea(q)
-    : q.type === 'listening_dictation'
+    : isListen
       ? renderListeningArea(q, hintUsed)
       : renderMultipleChoiceArea(q, hintUsed);
 
-  // Two-step answering: picking an option only highlights it and can
-  // still be changed. The first press of the primary button checks it
-  // (revealing right/wrong) instead of moving on; only once it's been
-  // checked (or was left blank) does the same button advance.
   const currentAnswer = state.studentAnswers[q.id];
   const isChecking = !!(currentAnswer && currentAnswer.checking);
   const hasUncheckedAnswer = !!currentAnswer && !currentAnswer.checked;
@@ -1262,9 +1351,15 @@ function renderStudentQuiz() {
     });
   });
 
-  if (q.type === 'sentence_reorder') bindReorderEvents(q);
-  else bindMultipleChoiceEvents(q);
-  if (q.type === 'listening_dictation') bindListeningEvents(q);
+  if (q.type === 'sentence_reorder') {
+    bindReorderEvents(q);
+  } else {
+    bindMultipleChoiceEvents(q);
+  }
+
+  if (isListen) {
+    bindListeningEvents(q);
+  }
 
   const hintBtn = document.getElementById('hint-lamp-btn');
   if (!answered) {
@@ -1283,8 +1378,6 @@ function renderMultipleChoiceArea(q, hintUsed) {
   const currentAnswer = state.studentAnswers[q.id];
   const currentValue = currentAnswer ? currentAnswer.value : undefined;
   const showOptionMeanings = hintUsed && !!q.optionMeanings;
-  // "locked" only kicks in once the answer has actually been checked -
-  // before that, the student can freely tap a different option.
   const checked = !!(currentAnswer && currentAnswer.checked);
   const checking = !!(currentAnswer && currentAnswer.checking);
 
@@ -1313,7 +1406,7 @@ function renderMultipleChoiceArea(q, hintUsed) {
 
 function bindMultipleChoiceEvents(q) {
   const currentAnswer = state.studentAnswers[q.id];
-  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return;
   mainEl().querySelectorAll('.option').forEach((el) => {
     el.addEventListener('click', () => {
       const opt = q.options[Number(el.dataset.optionIndex)];
@@ -1322,9 +1415,6 @@ function bindMultipleChoiceEvents(q) {
   });
 }
 
-// Picking an option just records it as the pending choice - no server
-// round trip, no lock. The student can tap a different option as many
-// times as they like until they press "Check answer".
 function selectOption(questionId, value) {
   const answeredAtMs = Date.now() - state.studentQuizStartedAt;
   const hintUsed = !!state.studentHintsUsed[questionId];
@@ -1332,11 +1422,6 @@ function selectOption(questionId, value) {
   renderStudentQuiz();
 }
 
-// Listening dictation - a "Play audio" button on top of the ordinary
-// multiple-choice option list. The target text is never shown as
-// text; the student only ever hears it via speechSynthesis and picks
-// the matching option, so this reuses renderMultipleChoiceArea and
-// bindMultipleChoiceEvents underneath rather than duplicating them.
 function renderListeningArea(q, hintUsed) {
   return `
     <div class="listening-audio-row">
@@ -1349,13 +1434,15 @@ function renderListeningArea(q, hintUsed) {
 
 function bindListeningEvents(q) {
   const playBtn = document.getElementById('listen-play-btn');
-  const speak = () => speakMandarin(q.audioText);
-  if (playBtn) playBtn.addEventListener('click', speak);
-  // Auto-play once when the question first loads, so the student
-  // doesn't have to tap before hearing anything. Skipped once an
-  // answer already exists, so re-renders (picking an option, showing
-  // the hint) don't replay it on top of itself.
-  if (!state.studentAnswers[q.id]) speak();
+  const textToPlay = q.audioText || q.answer || (q.options && q.options[0]) || '';
+
+  if (playBtn) {
+    playBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      speakMandarin(textToPlay);
+    };
+  }
 }
 
 function renderReorderArea(q) {
@@ -1396,15 +1483,13 @@ function renderReorderArea(q) {
 function bindReorderEvents(q) {
   const total = q.chunks.length;
   const currentAnswer = state.studentAnswers[q.id];
-  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return; // locked - checked or mid-check
+  if (currentAnswer && (currentAnswer.checked || currentAnswer.checking)) return;
 
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="pool"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
       const placed = [...(state.studentReorderProgress[q.id] || []), id];
       if (placed.length === total) {
-        // Fully assembled - becomes the pending answer, not checked yet.
-        // The student can still hit Clear to rebuild it before checking.
         delete state.studentReorderProgress[q.id];
         const answeredAtMs = Date.now() - state.studentQuizStartedAt;
         const hintUsed = !!state.studentHintsUsed[q.id];
@@ -1419,8 +1504,6 @@ function bindReorderEvents(q) {
   mainEl().querySelectorAll('.reorder-chip[data-chip-kind="assembled"]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = Number(el.dataset.chunkId);
-      // If this was already the (unchecked) pending answer, tapping a
-      // chip pulls it back out into the pool instead of clearing everything.
       const placed = (currentAnswer && !currentAnswer.checked ? currentAnswer.value : state.studentReorderProgress[q.id]) || [];
       const next = placed.filter((x) => x !== id);
       if (currentAnswer && !currentAnswer.checked) delete state.studentAnswers[q.id];
@@ -1500,16 +1583,11 @@ function sadPopAt(el) {
   setTimeout(() => span.remove(), 850);
 }
 
-// Sends the pending answer to the server and reveals right/wrong on
-// screen. This only fires once the student has committed to an
-// answer by pressing "Check answer" - not the moment they tap an
-// option - so the correct/incorrect icon never appears early.
 async function confirmCurrentAnswer(questionId) {
   const pending = state.studentAnswers[questionId];
   if (!pending || pending.checked || pending.checking) return;
   const { value, usedMeaning, answeredAtMs } = pending;
 
-  // Optimistic "checking" state so the UI can show a pulse while waiting.
   state.studentAnswers[questionId] = { value, usedMeaning, answeredAtMs, correct: null, checked: false, checking: true };
   renderStudentQuiz();
 
@@ -1547,9 +1625,6 @@ async function confirmCurrentAnswer(questionId) {
   }
 }
 
-// The single primary button on the quiz screen. First press on a
-// freshly-picked answer checks it; press it again (or press it with
-// nothing picked) and it moves on, submitting on the last question.
 async function studentCheckOrAdvance() {
   const q = state.studentQuiz.questions[state.studentQuestionIndex];
   const current = state.studentAnswers[q.id];
@@ -1619,10 +1694,6 @@ function renderStudentDone() {
   else playCorrectSound();
 }
 
-// A student's own answer review right after finishing - same idea as
-// the teacher's per-attempt review, but built entirely from the
-// `review` array the submit response already included, so it needs
-// no extra request.
 function renderStudentReview() {
   const result = state.studentResult;
   if (!result || !result.review) return go('');
