@@ -599,7 +599,10 @@ function renderTeacherNewQuiz() {
     </div>
 
     <div class="field" style="margin-bottom:14px;">
-      <label>Question types to include</label>
+      <label style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0;">
+        <span>Question types to include</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="kind-select-all-btn">${icon('check', 13)} Select all</button>
+      </label>
       <div class="kind-grid">
         ${QUESTION_KINDS.map((k) => `
           <label class="kind-check">
@@ -633,12 +636,22 @@ function renderTeacherNewQuiz() {
   const countInput = document.getElementById('question-count');
   const kindCheckboxes = Array.from(document.querySelectorAll('[data-kind-id]'));
   const kindError = document.getElementById('kind-error');
+  const selectAllBtn = document.getElementById('kind-select-all-btn');
+
+  // Label/action flips based on current state: all-checked shows
+  // "Unselect all" (next click clears everything), anything else
+  // shows "Select all" (next click checks everything).
+  const updateSelectAllBtn = () => {
+    const allChecked = kindCheckboxes.every((c) => c.checked);
+    selectAllBtn.innerHTML = allChecked ? `${icon('x', 13)} Unselect all` : `${icon('check', 13)} Select all`;
+  };
 
   const updatePromptText = () => {
     const kindIds = kindCheckboxes.filter((c) => c.checked).map((c) => c.dataset.kindId);
     if (kindIds.length === 0) {
       kindError.textContent = 'Pick at least one question type.';
       promptBox.textContent = '';
+      updateSelectAllBtn();
       return;
     }
     kindError.textContent = '';
@@ -646,11 +659,17 @@ function renderTeacherNewQuiz() {
     if (!Number.isFinite(count) || count < 1) count = 10;
     count = Math.min(30, Math.max(4, count));
     promptBox.textContent = buildQuizPrompt({ hskLevel: levelSelect.value, questionCount: count, kindIds });
+    updateSelectAllBtn();
   };
   updatePromptText();
   levelSelect.addEventListener('change', updatePromptText);
   countInput.addEventListener('input', updatePromptText);
   kindCheckboxes.forEach((c) => c.addEventListener('change', updatePromptText));
+  selectAllBtn.addEventListener('click', () => {
+    const allChecked = kindCheckboxes.every((c) => c.checked);
+    kindCheckboxes.forEach((c) => { c.checked = !allChecked; });
+    updatePromptText();
+  });
 
   document.getElementById('quiz-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -800,12 +819,7 @@ function renderAttemptRow(quiz, attempt) {
             ${!pending ? ` &middot; ${attempt.xpScore} XP${attempt.longestStreak >= 3 ? ` &middot; best streak ${attempt.longestStreak}` : ''}` : ''}
           </div>
         </div>
-        ${!pending ? `
-        <button class="btn btn-ghost btn-review" id="btn-${reviewId}" onclick="toggleReview('${reviewId}')">
-          ${icon('paper', 14)}
-          <span class="btn-review-label">Review</span>
-          <span class="btn-review-chevron">${icon('arrowRight', 12)}</span>
-        </button>` : ''}
+        ${!pending ? `<button class="btn btn-ghost btn-sm" onclick="toggleReview('${reviewId}')">${icon('paper', 14)} Review</button>` : ''}
       </div>
       ${!pending ? `<div id="${reviewId}" class="answer-review" style="display:none; width:100%;">${renderAnswerReview(quiz, attempt)}</div>` : ''}
     </div>
@@ -813,7 +827,7 @@ function renderAttemptRow(quiz, attempt) {
 }
 
 function renderAnswerReview(quiz, attempt) {
-  return quiz.questions.map((q, idx) => {
+  return quiz.questions.map((q) => {
     const given = attempt.answers[q.id];
     const value = given ? given.value : undefined;
     const usedMeaning = given && given.usedMeaning === true;
@@ -821,7 +835,7 @@ function renderAnswerReview(quiz, attempt) {
     let isCorrect, answeredText, correctText;
     if (q.type === 'sentence_reorder') {
       const total = q.chunks.length;
-      isCorrect = Array.isArray(value) && value.length === total && value.every((id, i) => id === i);
+      isCorrect = Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
       answeredText = Array.isArray(value) ? value.map((id) => q.chunks[id]).join(' ') : '(no answer)';
       correctText = q.chunks.join(' ');
     } else {
@@ -833,12 +847,11 @@ function renderAnswerReview(quiz, attempt) {
     return `
       <div class="answer-line">
         <span class="mark ${isCorrect ? 'correct' : 'incorrect'}">${icon(isCorrect ? 'check' : 'x', 15)}</span>
-        <div style="flex:1;">
-          <div><span class="answer-num">${idx + 1}.</span> ${escapeHtml(q.question)}</div>
-          <div class="answer-detail">
-            <div>Answered: ${escapeHtml(answeredText)}</div>
-            ${!isCorrect ? `<div>Correct: ${escapeHtml(correctText)}</div>` : ''}
-            ${usedMeaning && isCorrect ? `<div>Meaning was shown, half credit</div>` : ''}
+        <div>
+          <div>${escapeHtml(q.question)}</div>
+          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
+            Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}
+            ${usedMeaning && isCorrect ? ' · meaning was shown, half credit' : ''}
           </div>
         </div>
       </div>`;
@@ -847,17 +860,7 @@ function renderAnswerReview(quiz, attempt) {
 
 function toggleReview(id) {
   const el = document.getElementById(id);
-  if (!el) return;
-
-  const opening = el.style.display === 'none';
-  el.style.display = opening ? 'block' : 'none';
-
-  const btn = document.getElementById(`btn-${id}`);
-  if (btn) {
-    btn.classList.toggle('is-open', opening);
-    const label = btn.querySelector('.btn-review-label');
-    if (label) label.textContent = opening ? 'Hide review' : 'Review';
-  }
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
 // ---------------------------------------------------------------------
@@ -1624,7 +1627,7 @@ function renderStudentReview() {
   const result = state.studentResult;
   if (!result || !result.review) return go('');
 
-  const linesHtml = result.review.map((r, idx) => {
+  const linesHtml = result.review.map((r) => {
     let givenText, correctText;
     if (r.type === 'sentence_reorder') {
       givenText = Array.isArray(r.given) ? r.given.map((id) => r.chunkLabels[id]).join(' ') : '(no answer)';
@@ -1636,11 +1639,10 @@ function renderStudentReview() {
     return `
       <div class="answer-line">
         <span class="mark ${r.correct ? 'correct' : 'incorrect'}">${icon(r.correct ? 'check' : 'x', 15)}</span>
-        <div style="flex:1;">
-          <div><span class="answer-num">${idx + 1}.</span> ${escapeHtml(r.question)}</div>
-          <div class="answer-detail">
-            <div>Your answer: ${escapeHtml(givenText)}</div>
-            ${!r.correct ? `<div>Correct answer: ${escapeHtml(correctText)}</div>` : ''}
+        <div>
+          <div>${escapeHtml(r.question)}</div>
+          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
+            Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}
           </div>
         </div>
       </div>`;
