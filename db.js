@@ -322,6 +322,26 @@ async function listAttemptsByQuiz(quizId) {
   return rows.map(attemptFromRow);
 }
 
+// ---------------------------------------------------------------------
+// TTS audio cache - see the /api/tts route in server.js. Keyed by the
+// exact text that was spoken, so "你" and "你好" are separate entries.
+// ---------------------------------------------------------------------
+
+async function getCachedTts(textKey) {
+  const row = unwrap(
+    await supabase.from('tts_cache').select('audio_base64').eq('text_key', textKey).maybeSingle()
+  );
+  return row ? row.audio_base64 : null;
+}
+
+// Upsert, not insert - two students triggering the same brand-new
+// word at nearly the same moment would otherwise race to insert the
+// same primary key and one of them would fail with a duplicate-key
+// error.
+async function saveCachedTts(textKey, audioBase64) {
+  unwrap(await supabase.from('tts_cache').upsert({ text_key: textKey, audio_base64: audioBase64 }));
+}
+
 module.exports = {
   createQuiz,
   listQuizzes,
@@ -336,4 +356,6 @@ module.exports = {
   recordAnswer,
   finalizeAttempt,
   listAttemptsByQuiz,
+  getCachedTts,
+  saveCachedTts,
 };
