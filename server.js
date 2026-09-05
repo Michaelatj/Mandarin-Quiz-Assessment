@@ -478,6 +478,77 @@ app.post('/api/attempts/:attemptId/submit', async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------
+// Mandarin audio (upgrade from the browser's built-in Web Speech API)
+//
+// Web Speech API voice quality is entirely dependent on whatever the
+// student's own browser/OS ships, and short single-syllable audio
+// (tone-check questions) is prone to getting clipped right at the
+// end - exactly where a Mandarin tone's pitch movement lives. This
+// route generates real audio instead, through Google Translate's
+// public text-to-speech endpoint (the same one translate.google.com
+// itself uses for its speaker icon - no API key or signup, so it's
+// free, but it's unofficial: Google could change or rate-limit it
+// without notice, which is why the client (see speakMandarin in
+// app.js) keeps the old Web Speech API as an automatic fallback if a
+// request to this route ever fails).
+//
+// Every distinct piece of text is generated once and cached - in
+// memory for this server process, and in Supabase so a cold start or
+// a second server instance doesn't have to regenerate a word that
+// was already fetched before. After the first time any student hears
+// a given word, every later playback of that same word, in any quiz,
+// is instant and free.
+const ttsMemoryCache = new Map();
+const MAX_TTS_TEXT_LENGTH = 60; // generously covers any single question's audio text
+
+async function fetchGoogleTranslateTts(text) {
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=zh-CN&q=${encodeURIComponent(text)}`;
+  const response = await fetch(url, {
+    headers: {
+      // This endpoint 403s any request that doesn't look like it came
+      // from a real browser tab.
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      Referer: 'https://translate.google.com/',
+    },
+  });
+  if (!response.ok) throw new Error(`Google Translate TTS responded ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+app.get('/api/tts', async (req, res) => {
+  const text = (req.query.text || '').toString().trim();
+  if (!text) return res.status(400).json({ error: 'Missing "text" query param.' });
+  if (text.length > MAX_TTS_TEXT_LENGTH) return res.status(400).json({ error: 'Text too long.' });
+
+  const sendAudio = (buffer) => {
+    res.set('Content-Type', 'audio/mpeg');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(buffer);
+  };
+
+  if (ttsMemoryCache.has(text)) return sendAudio(ttsMemoryCache.get(text));
+
+  try {
+    const cachedBase64 = await db.getCachedTts(text);
+    if (cachedBase64) {
+      const buffer = Buffer.from(cachedBase64, 'base64');
+      ttsMemoryCache.set(text, buffer);
+      return sendAudio(buffer);
+    }
+
+    const buffer = await fetchGoogleTranslateTts(text);
+    ttsMemoryCache.set(text, buffer);
+    db.saveCachedTts(text, buffer.toString('base64')).catch((err) => {
+      console.error(`Failed to persist TTS cache for "${text}":`, err.message);
+    });
+    sendAudio(buffer);
+  } catch (err) {
+    console.error(`TTS generation failed for "${text}":`, err.message);
+    res.status(502).json({ error: 'TTS generation failed.' });
+  }
+});
+
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
