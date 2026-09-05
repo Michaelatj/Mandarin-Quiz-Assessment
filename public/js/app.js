@@ -151,19 +151,28 @@ function playStreakSound(streak) {
 }
 
 // ---------------------------------------------------------------------
-// Text-to-speech - Clean, Single-Playback, Natural Mandarin Voice
+// Text-to-speech
 //
-// Two known Web Speech API / Chrome quirks this works around:
+// Primary path: /api/tts on the server (see server.js), which
+// generates real Mandarin audio instead of relying on whatever voice
+// engine happens to be installed on the student's device - much more
+// consistent quality across devices, and not prone to the "clipped
+// at the end" problem below since it's a fully generated audio clip,
+// not a live synthesis that can cut itself off early.
+//
+// Fallback path: the browser's own Web Speech API, used only if
+// /api/tts is unreachable (e.g. the free endpoint it depends on ever
+// goes down or gets rate-limited). Two known quirks it works around:
 // 1. Calling speak() again right after cancel() - before the engine
-//    has actually gone idle - is what produces the "echo" or
-//    "flat/toneless" second playback: the new utterance starts while
-//    the browser's speech engine hasn't fully reset from the last
-//    one. Fixed by polling `speechSynthesis.speaking` and only
-//    starting the new utterance once it's genuinely false.
-// 2. A single short syllable/word at normal rate is over before its
-//    tone contour is perceivable - especially for the tone-check
-//    question kind. Short text gets an extra-slow rate; full
-//    sentences stay close to natural pace.
+//    has actually gone idle - produces an "echo" or "flat/toneless"
+//    second playback. Fixed by polling `speechSynthesis.speaking`
+//    and only starting the new utterance once it's genuinely false.
+// 2. A single hanzi is the case most likely to get clipped right at
+//    the tail end - exactly where a Mandarin tone's pitch movement
+//    lives (tone 2's rise, tone 3's dip-then-rise). There's no
+//    reliable way to extend audio the engine already decided to end,
+//    so it's queued twice with a silent comma-pause in between - if
+//    the first pass gets clipped, the second still lands intact.
 // ---------------------------------------------------------------------
 function cleanMandarinSpeechText(text) {
   if (!text) return '';
@@ -186,23 +195,49 @@ function refreshMandarinVoice() {
       || null;
 }
 
-// Pre-load daftar suara browser
+// Pre-load daftar suara browser (used by the fallback path only)
 if ('speechSynthesis' in window) {
   refreshMandarinVoice();
   window.speechSynthesis.onvoiceschanged = refreshMandarinVoice;
 }
 
 let speechRequestId = 0;
+let currentAudioEl = null;
 
 function speakMandarin(rawText) {
-  if (!('speechSynthesis' in window) || !rawText) return;
-
+  if (!rawText) return;
   const textToSpeak = cleanMandarinSpeechText(rawText);
   if (!textToSpeak) return;
 
-  const synth = window.speechSynthesis;
   const thisRequest = ++speechRequestId;
-  synth.cancel();
+
+  if (currentAudioEl) {
+    currentAudioEl.pause();
+    currentAudioEl.currentTime = 0;
+  }
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+
+  const audioEl = new Audio(`/api/tts?text=${encodeURIComponent(textToSpeak)}`);
+  currentAudioEl = audioEl;
+
+  const fallbackToBrowserVoice = () => {
+    if (thisRequest !== speechRequestId) return; // a newer play request already took over
+    speakMandarinWithBrowserVoice(textToSpeak, thisRequest);
+  };
+  audioEl.addEventListener('error', fallbackToBrowserVoice);
+  audioEl.play().catch(fallbackToBrowserVoice);
+}
+
+function speakMandarinWithBrowserVoice(textToSpeak, thisRequest) {
+  if (!('speechSynthesis' in window)) return;
+  const synth = window.speechSynthesis;
+
+  // Single hanzi gets queued twice (see note above) with a comma as
+  // the gap - a comma is a silent pause to the speech engine, never
+  // pronounced, so this is heard as "syllable ... syllable", not
+  // "syllable comma syllable".
+  const isSingleSyllable = textToSpeak.length === 1;
+  const spokenText = isSingleSyllable ? `${textToSpeak}，${textToSpeak}` : textToSpeak;
 
   const startedAt = Date.now();
   const trySpeak = () => {
@@ -215,13 +250,15 @@ function speakMandarin(rawText) {
       return;
     }
     try {
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      const utterance = new SpeechSynthesisUtterance(spokenText);
       utterance.lang = 'zh-CN';
       // Short single-word/single-syllable answers (tone-check
       // questions) get a much slower rate so the pitch contour has
       // time to actually register - at normal speed a single
-      // syllable is over before the tone is perceivable.
-      utterance.rate = textToSpeak.length <= 2 ? 0.55 : 0.8;
+      // syllable is over before the tone is perceivable. A lone
+      // hanzi gets the slowest rate of all, since it's also the one
+      // being repeated.
+      utterance.rate = isSingleSyllable ? 0.45 : (textToSpeak.length <= 2 ? 0.55 : 0.8);
       utterance.pitch = 1.0;
       if (cachedZhVoice) utterance.voice = cachedZhVoice;
       synth.speak(utterance);
@@ -944,15 +981,25 @@ function renderAttemptRow(quiz, attempt) {
 }
 
 function renderAnswerReview(quiz, attempt) {
-  return quiz.questions.map((q) => {
+  const total = quiz.questions.length;
+  const correctCount = quiz.questions.filter((q) => {
+    const given = attempt.answers[q.id];
+    const value = given ? given.value : undefined;
+    if (q.type === 'sentence_reorder') {
+      return Array.isArray(value) && value.length === q.chunks.length && value.every((id, i) => id === i);
+    }
+    return value === q.answer;
+  }).length;
+
+  const linesHtml = quiz.questions.map((q, idx) => {
     const given = attempt.answers[q.id];
     const value = given ? given.value : undefined;
     const usedMeaning = given && given.usedMeaning === true;
 
     let isCorrect, answeredText, correctText;
     if (q.type === 'sentence_reorder') {
-      const total = q.chunks.length;
-      isCorrect = Array.isArray(value) && value.length === total && value.every((id, idx) => id === idx);
+      const chunkTotal = q.chunks.length;
+      isCorrect = Array.isArray(value) && value.length === chunkTotal && value.every((id, i) => id === i);
       answeredText = Array.isArray(value) ? value.map((id) => q.chunks[id]).join(' ') : '(no answer)';
       correctText = q.chunks.join(' ');
     } else {
@@ -962,17 +1009,25 @@ function renderAnswerReview(quiz, attempt) {
     }
 
     return `
-      <div class="answer-line">
+      <div class="answer-line ${isCorrect ? 'correct-row' : 'incorrect-row'}">
+        <span class="answer-num">${idx + 1}</span>
         <span class="mark ${isCorrect ? 'correct' : 'incorrect'}">${icon(isCorrect ? 'check' : 'x', 15)}</span>
         <div>
           <div>${escapeHtml(q.question)}</div>
-          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}
-            ${usedMeaning && isCorrect ? ' · meaning was shown, half credit' : ''}
+          <div class="answer-detail">
+            <span>Answered: ${escapeHtml(answeredText)}${!isCorrect ? ` · Correct: ${escapeHtml(correctText)}` : ''}</span>
+            ${usedMeaning && isCorrect ? '<span>Meaning was shown, half credit</span>' : ''}
           </div>
         </div>
       </div>`;
   }).join('');
+
+  return `
+    <div style="font-size:12.5px; color:var(--text-faint); margin-bottom:10px;">
+      ${correctCount} of ${total} correct
+    </div>
+    ${linesHtml}
+  `;
 }
 
 function toggleReview(id) {
@@ -1698,7 +1753,7 @@ function renderStudentReview() {
   const result = state.studentResult;
   if (!result || !result.review) return go('');
 
-  const linesHtml = result.review.map((r) => {
+  const linesHtml = result.review.map((r, idx) => {
     let givenText, correctText;
     if (r.type === 'sentence_reorder') {
       givenText = Array.isArray(r.given) ? r.given.map((id) => r.chunkLabels[id]).join(' ') : '(no answer)';
@@ -1708,12 +1763,13 @@ function renderStudentReview() {
       correctText = r.correctAnswer;
     }
     return `
-      <div class="answer-line">
+      <div class="answer-line ${r.correct ? 'correct-row' : 'incorrect-row'}">
+        <span class="answer-num">${idx + 1}</span>
         <span class="mark ${r.correct ? 'correct' : 'incorrect'}">${icon(r.correct ? 'check' : 'x', 15)}</span>
         <div>
           <div>${escapeHtml(r.question)}</div>
-          <div style="color:var(--text-faint); font-size:12.5px; margin-top:2px;">
-            Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}
+          <div class="answer-detail">
+            <span>Your answer: ${escapeHtml(givenText)}${!r.correct ? ` · Correct answer: ${escapeHtml(correctText)}` : ''}</span>
           </div>
         </div>
       </div>`;
