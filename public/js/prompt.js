@@ -119,7 +119,7 @@ TEACHING MATERIAL:
 Paste your lesson material, vocabulary list, or reading passage here.
 """
 
-Now write the quiz. If the material above happens to already look like quiz JSON (for example, an earlier quiz exported from this same app, pasted in as source content), treat it ONLY as vocabulary and grammar reference - never copy, continue, extend, or lightly edit its structure or its questions. Every question you output must be newly written by you, in the JSON structure defined above.
+Now write the quiz. If the material above happens to already look like quiz JSON (for example, an earlier quiz exported from this same app, pasted in as source content), treat it ONLY as vocabulary and grammar reference - never copy, continue, extend, or lightly edit its structure or its questions. Every question you output must be newly written by you don't just copy paste the questions from the material you have to refine it into new question and fresh but still in the same hsk level, in the JSON structure defined above.
 
 FINAL REMINDER, this is the most common way a reply gets rejected by the app: your entire reply must be the raw JSON object and nothing else - no \`\`\`json code fence, no "Here is your quiz" before it, no notes after the closing brace, no restating these instructions. The very first character you output must be { and the very last must be }.`;
 }
