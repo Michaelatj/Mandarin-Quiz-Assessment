@@ -27,6 +27,20 @@ const QUESTION_KINDS = [
     instructions: `WHAT DOES IT MEAN ("type": "multiple_choice") - Question is a Hanzi term with pinyin. Options are English translations. Omit "optionMeanings".`,
   },
   {
+    id: 'hanzi_to_pinyin',
+    label: 'Hanzi -> Pinyin',
+    hint: 'A Hanzi word, phrase, or sentence; student picks the correct pinyin.',
+    defaultOn: false,
+    instructions: `HANZI -> PINYIN ("type": "multiple_choice") - Question is Hanzi ONLY, with no pinyin next to it, because the pinyin is the answer. Vary the length across the quiz: some single words, some short phrases, some full sentences. Options are pinyin ONLY (no Hanzi, no parentheses), written with tone marks and spaced by word, like: nǐ hǎo ma. Make the wrong options believable: the same syllables with a different tone, or a similar initial or final (zh/z, sh/s, ch/c, an/ang, in/ing). Keep every option about the same length as the answer. Put the English meaning in "questionMeaning". Omit "optionMeanings".`,
+  },
+  {
+    id: 'pinyin_to_hanzi',
+    label: 'Pinyin -> Hanzi',
+    hint: 'A pinyin word, phrase, or sentence; student picks the correct Hanzi.',
+    defaultOn: false,
+    instructions: `PINYIN -> HANZI ("type": "multiple_choice") - Question is pinyin ONLY (tone marks, spaced by word, no Hanzi, no parentheses). Vary the length across the quiz: some single words, some short phrases, some full sentences. Options are Hanzi ONLY with no pinyin, since pinyin next to them would give the answer away. Make the wrong options believable: homophones or near-homophones, look-alike characters, or a similar word that does not fit the meaning. Keep every option about the same length as the answer. Put the English meaning in "questionMeaning". Omit "optionMeanings".`,
+  },
+  {
     id: 'translate_id',
     label: 'Translate to Indonesian',
     hint: 'A Hanzi sentence, student picks the correct Indonesian translation.',
